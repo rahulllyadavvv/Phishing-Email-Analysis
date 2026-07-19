@@ -2,23 +2,23 @@
 
 **A SOC-analyst-style phishing triage portfolio — 6 real-world email samples, each investigated end-to-end with full IOC extraction and MITRE ATT&CK mapping.**
 
-All emails, links, and attachments referenced here are defanged (`hxxp`, brackets around dots) and any live malicious attachments have been withheld — only their file hashes are included. **Do not un-defang and visit these URLs or open these attachments.**
+All emails, links, and attachments referenced here are provided in th respective email folder.
 
 ## Objective
 
-Email is still the single most common initial-access vector into an organization, and triaging a suspicious email quickly and correctly is a core SOC analyst responsibility. This repository exists to demonstrate that skill in practice: six real phishing emails, each investigated from raw headers to a defensible final verdict, using one consistent methodology rather than ad-hoc guesswork.
+Email is still the single most common initial-access vector into an organization, and triaging a suspicious email quickly and correctly is a core SOC analyst responsibility. This repository exists to demonstrate that skill in practice: six real phishing emails, each investigated from raw headers to a defensible final verdict, using one consistent methodology.
 
 Every write-up in this repository is built the way a SOC analyst would document a real triage, and touches the same skills:
 
-- **Header forensics** — reading raw email headers and interpreting SPF, DKIM, and DMARC results correctly, including when a technically "clean" pass still doesn't mean the sender is trustworthy
+- **Header forensics** — reading raw email headers and interpreting SPF, DKIM, and DMARC results, Authentication Results  correctly, including when a technically "clean" pass still doesn't mean the sender is trustworthy
 - **Sender and domain investigation** — spotting typosquatting, homoglyph substitution, display-name spoofing, and domain mismatches across From, Reply-To, and Return-Path
-- **Threat intelligence lookups** — using tools like VirusTotal and EasyDMARC to independently verify domains, URLs, and file hashes rather than taking anything at face value
+- **Threat intelligence lookups** — Analyzing content language(fear,greed,quickAction), using tools like VirusTotal and EasyDMARC to independently verify domains, URLs, and file hashes rather than taking anything at face value
 - **Hidden artifact analysis** — finding tracking pixels, malformed headers, and filter-evasion content designed specifically to not be seen
 - **Structured reporting** — IOC tables and MITRE ATT&CK mapping on every case, in a format a SOC team could drop straight into a ticket or incident report
 
 ## Vision
 
-The goal of this repository isn't just to label six emails "phishing" — any spam filter can do that. It's to show the reasoning behind the verdict, case by case, so someone reviewing this repository can see exactly how a SOC analyst would work through a suspicious email from first glance to final classification. Each case was deliberately chosen to cover a different phishing technique, so the portfolio demonstrates range across the kinds of attacks a SOC analyst is likely to encounter, not repeated practice on one trick.
+The goal of this repository isn't just to label six emails "phishing" any spam filter can do that. It's to show the reasoning behind the verdict, case by case, so someone reviewing this repository can see exactly how a SOC analyst would work through a suspicious email from first glance to final classification. Each case was deliberately chosen to cover a different phishing technique, so the portfolio demonstrates range across the kinds of attacks a SOC analyst is likely to encounter, not repeated practice on one trick.
 
 | Technique demonstrated | Case |
 |---|---|
@@ -44,7 +44,7 @@ flowchart TD
     F --> G["7. MITRE ATT&CK Mapping"]
 ```
 
-**The core principle behind step 1:** a clean SPF/DKIM/DMARC pass proves the message came from infrastructure genuinely authorized by the sending domain — it does not prove that sender is trustworthy. Cases 01 and 04 in this repository pass every authentication check and are still phishing, because the attacker rented a corner of legitimate infrastructure (a free Zendesk trial, a personal Gmail account) instead of spoofing anything.
+**The core principle behind step 1:** a clean SPF/DKIM/DMARC pass proves the message came from infrastructure genuinely authorized by the sending domain it does not prove that sender is trustworthy. Cases 01 and 04 in this repository pass every authentication check and are still phishing, because the attacker rented a corner of legitimate infrastructure (a free Zendesk trial, a personal Gmail account) instead of spoofing anything.
 
 ## Case Studies
 
