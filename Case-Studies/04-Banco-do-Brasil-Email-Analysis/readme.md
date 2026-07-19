@@ -1,4 +1,4 @@
-# Phishing Email Report 5 — "Banco do Brasil" Gmail PDF Email
+# Phishing Email Report — "Banco do Brasil" Gmail PDF Email
 
 **What this email is trying to do:** It poses as a Banco do Brasil consumer-service notice claiming there are unclaimed funds tied to the recipient's CPF (Brazilian Tax ID), pushing them to open an attached PDF within a 48-hour deadline.
 
