@@ -1,5 +1,5 @@
 
-#Phishing Email Report  — "Trust Wallet Verification(zenDesk)" Email
+# Phishing Email Report  — "Trust Wallet Verification(zenDesk)" Email
 
 **What this email is trying to do:** It poses as a Trust Wallet "urgent account verification" notice, sent through a real Zendesk account, pressuring the reader to click a "Verification Link" before their account is suspended.
 
