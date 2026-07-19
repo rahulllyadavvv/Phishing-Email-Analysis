@@ -23,15 +23,15 @@ The goal of this repository isn't just to label six emails "phishing" — any sp
 | Technique demonstrated | Case |
 |---|---|
 | Legitimate SaaS platform abused as a mail relay (passes SPF/DKIM/DMARC cleanly) | 01 |
-| Reply-bait via `mailto:` links instead of a credential-harvesting redirect | 02 |
-| Domain Generation Algorithm (DGA) sending domain + aged-domain reuse | 03 |
-| Real and fake links mixed in the same email to slip past a quick scan | 04 |
-| Genuine personal Gmail account + encrypted PDF attachment to defeat AV scanning | 05 |
-| Mail-merge personalization + disposable domain infrastructure | 06 |
+| Domain Generation Algorithm (DGA) sending domain + aged-domain reuse | 02 |
+| Real and fake links mixed in the same email to slip past a quick scan | 03 |
+| Genuine personal Gmail account + encrypted PDF attachment to defeat AV scanning | 04 |
+| Mail-merge personalization + disposable domain infrastructure | 05 |
+| Reply-bait via `mailto:` links instead of a credential-harvesting redirect | 06 |
 
 ## Methodology
 
-Every case follows the same seven-step triage process, documented in full in [`docs/methodology.md`](docs/methodology.md):
+Every case follows the same seven-step triage process, documented in full in [`Methodology/readme.md`](Methodology/readme.md):
 
 ```mermaid
 flowchart TD
@@ -44,40 +44,38 @@ flowchart TD
     F --> G["7. MITRE ATT&CK Mapping"]
 ```
 
-**The core principle behind step 1:** a clean SPF/DKIM/DMARC pass proves the message came from infrastructure genuinely authorized by the sending domain — it does not prove that sender is trustworthy. Cases 01 and 05 in this repository pass every authentication check and are still phishing, because the attacker rented a corner of legitimate infrastructure (a free Zendesk trial, a personal Gmail account) instead of spoofing anything.
+**The core principle behind step 1:** a clean SPF/DKIM/DMARC pass proves the message came from infrastructure genuinely authorized by the sending domain — it does not prove that sender is trustworthy. Cases 01 and 04 in this repository pass every authentication check and are still phishing, because the attacker rented a corner of legitimate infrastructure (a free Zendesk trial, a personal Gmail account) instead of spoofing anything.
 
 ## Case Studies
 
 | # | Case | Verdict | Key Technique | MITRE ATT&CK |
 |---|---|---|---|---|
-| 01 | [SaaS-Relay Abuse (Zendesk / Trust Wallet)](case-studies/01-saas-relay-abuse-zendesk/) | Phishing | Passed SPF, DKIM, **and** DMARC — attacker used a free Zendesk trial subdomain as a legitimate mail relay | T1566.002, T1204.001, T1036.005, T1583.006 |
-| 02 | [Spoofed Sender (Microsoft Account Team)](case-studies/02-spoofed-sender-microsoft/) | Phishing | Reply-bait via `mailto:` links instead of credential-harvesting redirects; tracking pixel confirmed by VirusTotal community as a known campaign | T1566.002, T1204.001, T1036.005, T1583.001 |
-| 03 | [DGA Domain (PayPal "$90 Reward")](case-studies/03-dga-domain-paypal/) | Phishing | Sending domain flagged by VirusTotal as algorithmically generated (DGA); aged-domain reuse on the phishing redirect | T1566.002, T1204.001, T1036.005, T1583.001, T1583.006 |
-| 04 | [Facebook Login Attempt](case-studies/04-facebook-login-attempt/) | Phishing | Mixed real/fake links — genuine facebook.com links alongside `mailto:` reply-traps in the same email | T1566.002, T1204.001, T1036.005, T1583.001, T1585.002 |
-| 05 | [Banco do Brasil Gmail PDF Lure](case-studies/05-banco-do-brasil-gmail-pdf/) | Phishing | Passed SPF, DKIM, and DMARC via a genuine Gmail account; malicious PDF deliberately encrypted to block AV/sandbox scanning | T1566.001, T1204.002, T1036.005, T1027.013, T1585.002 |
-| 06 | [Life Line Screening Discount Package](case-studies/06-life-line-screening/) | Phishing | Mail-merge subject-line trick and the highest spam-confidence score (SCL 9) in the set | T1566.002, T1204.001, T1036.005, T1583.001, T1583.006 |
+| 01 | [SaaS-Relay Abuse (Zendesk / Trust Wallet)](Case-Studies/01-saas-relay-abuse-zendesk/) | Phishing | Passed SPF, DKIM, **and** DMARC — attacker used a free Zendesk trial subdomain as a legitimate mail relay | T1566.002, T1204.001, T1036.005, T1583.006 |
+| 02 | [DGA Domain (PayPal "$90 Reward")](Case-Studies/02-PayPal-Email-Analysis/) | Phishing | Sending domain flagged by VirusTotal as algorithmically generated (DGA); aged-domain reuse on the phishing redirect | T1566.002, T1204.001, T1036.005, T1583.001, T1583.006 |
+| 03 | [Facebook Login Attempt](Case-Studies/03-Facebook-Email-Analysis/) | Phishing | Mixed real/fake links — genuine facebook.com links alongside `mailto:` reply-traps in the same email | T1566.002, T1204.001, T1036.005, T1583.001, T1585.002 |
+| 04 | [Banco do Brasil Gmail PDF Lure](Case-Studies/04-Banco-do-Brasil-Email-Analysis/) | Phishing | Passed SPF, DKIM, and DMARC via a genuine Gmail account; malicious PDF deliberately encrypted to block AV/sandbox scanning | T1566.001, T1204.002, T1036.005, T1027.013, T1585.002 |
+| 05 | [Life Line Screening Discount Package](Case-Studies/05-Life%20Line%20Screening-Email-Analysis/) | Phishing | Mail-merge subject-line trick and the highest spam-confidence score (SCL 9) in the set | T1566.002, T1204.001, T1036.005, T1583.001, T1583.006 |
+| 06 | [Spoofed Sender (Microsoft Account Team)](Case-Studies/06-Microsoft-Email-Analysis/) | Phishing | Reply-bait via `mailto:` links instead of credential-harvesting redirects; tracking pixel confirmed by VirusTotal community as a known campaign | T1566.002, T1204.001, T1036.005, T1583.001 |
 
 ## Repository Structure
 
 ```
 phishing-email-analysis/
-├── README.md                      ← this file
-├── docs/
-│   └── methodology.md             ← the 7-step triage framework applied to every case
-├── case-studies/
-│   ├── 01-saas-relay-abuse-zendesk/
-│   ├── 02-spoofed-sender-microsoft/
-│   ├── 03-dga-domain-paypal/
-│   ├── 04-facebook-login-attempt/
-│   ├── 05-banco-do-brasil-gmail-pdf/
-│   └── 06-life-line-screening/
-│       ├── README.md              ← full write-up: headers, sender, body, links, hidden artifacts, IOCs, MITRE mapping
-│       ├── email-sanitized.eml    ← defanged raw email
-│       └── screenshots/           ← tool evidence (VirusTotal, EasyDMARC, etc.)
-└── iocs/
-    └── all-cases-iocs.csv         ← consolidated indicators of compromise across all cases
+├── README.md                          ← this file
+├── Methodology/
+│   └── readme.md                      ← the 7-step triage framework applied to every case
+└── Case-Studies/
+    ├── 01-saas-relay-abuse-zendesk/
+    ├── 02-PayPal-Email-Analysis/
+    ├── 03-Facebook-Email-Analysis/
+    ├── 04-Banco-do-Brasil-Email-Analysis/
+    ├── 05-Life Line Screening-Email-Analysis/
+    └── 06-Microsoft-Email-Analysis/
+        ├── README.md                  ← full write-up: headers, sender, body, links, hidden artifacts, IOCs, MITRE mapping
+        ├── Eml File/                  ← defanged raw email for this case
+        └── Screenshots/               ← tool evidence (VirusTotal, EasyDMARC, etc.)
 ```
 
 ## Disclaimer
 
-These samples were collected for educational security-research purposes. All content is defanged. This repository does not host any functional malware or live phishing infrastructure.
+These samples were collected for educational security-research purposes. This repository does not host any functional malware or live phishing infrastructure.
