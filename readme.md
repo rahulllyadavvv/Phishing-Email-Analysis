@@ -1,51 +1,44 @@
+# Phishing Email Analysis
 
-# Email Analysis
+**6 real-world phishing samples · investigated end-to-end using a repeatable SOC-analyst triage framework · full IOC extraction and MITRE ATT&CK mapping on every case.**
 
-Almost every individual over the internet uses a mail service, making it a common target for attackers. Analyzing mail and being able to classify it as malicious or not is a very important and helpful skill to learn.
+All emails, links, and attachments referenced here are defanged (`hxxp`, brackets around dots) and any live malicious attachments have been withheld — only their file hashes are included. **Do not un-defang and visit these URLs or open these attachments.**
 
-Let's dig deep and learn the procedure of analyzing an email.
+## Objective
 
-The steps are:
+Email remains the single most common initial-access vector into an organization, and triaging a suspicious email quickly and correctly is a core SOC analyst skill. This repository is a hands-on portfolio built to demonstrate that skill: six real phishing emails, each investigated from raw headers to final verdict using the same consistent methodology, so the process is repeatable and the findings are defensible — not just "this looks fake."
 
-## 1. Header Analysis
+Each case covers a different technique on purpose, so the repository as a whole demonstrates breadth, not just repetition of one trick:
 
-In this section we will focus on SPF, DKIM, and DMARC checks.
 
-**SPF (Sender Policy Framework):** It ensures the SMTP server IP is authorised to send email on behalf of the (envelope from) domain. The SMTP server IP must be present in the DNS records of the domain (the domain of the envelope-from address, generally noted as the return-path address).
+## Methodology
 
-**DKIM (DomainKeys Identified Mail):** It is used to maintain the integrity of the mail during its transfer from sender to receiver using a cryptographic signature. The sending server attaches a hidden digital signature to the email header using a private key; the receiving server then fetches the sender's public key from the DNS records and decrypts the signature. If it is not tampered with or altered, it means the email is unaltered and maintains integrity.
+Every case follows the same seven-step triage flow, documented in full in [`docs/methodology.md`](docs/methodology.md):
 
-**DMARC (Domain-based Message Authentication, Reporting and Conformance):** DMARC passes if at least one of SPF or DKIM passes and is aligned with the From domain; it fails only when both fail. DMARC's real job is alignment: it checks that the domain validated by SPF (the return-path/envelope-from) and/or the domain in the DKIM signature matches the visible From: header domain. It also acts as a policy enforcer and reporting tool.
+```mermaid
+flowchart TD
+    A["1. Header Analysis
+    SPF / DKIM / DMARC"] --> B["2. Sender / Domain Check"]
+    B --> C["3. Body Language & Tone Analysis"]
+    C --> D["4. URL / Attachment Analysis"]
+    D --> E["5. Hidden Artifact Detection"]
+    E --> F["6. IOC Extraction"]
+    F --> G["7. MITRE ATT&CK Mapping"]
+```
 
-**Three DMARC Policies:**
-1. **p=none (Monitoring Only):** The email will be delivered normally even if it fails the authentication check.
-2. **p=quarantine (Spam Folder):** Emails that fail authentication are sent to the SPAM or JUNK folder.
-3. **p=reject (Block Completely):** Emails that fail authentication are blocked entirely by the receiving server and never reach the user.
+| Technique demonstrated | Case |
+|---|---|
+| Legitimate SaaS platform abused as a mail relay (passes SPF/DKIM/DMARC cleanly) | 01 |
+| Reply-bait via `mailto:` links instead of a credential-harvesting redirect | 02 |
+| Domain Generation Algorithm (DGA) sending domain + aged-domain reuse | 03 |
+| Real and fake links mixed in the same email to slip past a quick scan | 04 |
+| Genuine personal Gmail account + encrypted PDF attachment to defeat AV scanning | 05 |
+| Mail-merge personalization + disposable domain infrastructure | 06 |
 
-## 2. Sender / Domain Checks
+**The core principle behind step 1:** a clean SPF/DKIM/DMARC pass proves the message came from infrastructure genuinely authorized by the sending domain — it does not prove that sender is trustworthy. Cases 01 and 05 in this repository pass every authentication check and are still phishing, because the attacker rented a corner of legitimate infrastructure (a free Zendesk trial, a personal Gmail account) instead of spoofing anything.
 
-In this we will analyse the domain in the From, Return-Path, and Reply-To headers. We will ensure there is no typosquatting / character substitution tricks, check domain age, and check the consistency in the domain names. Suppose the From is @microsoft.com and the Return-Path is @zetatech — there is no consistency, they are totally different domains, so it's a red flag.
 
-## 3. Body Language / Tone Analysis of the Email Body
 
-We will check if the mail is trying to create a panic situation / urgency or trying to tempt the user with greed via offers and discounts.
+## Disclaimer
 
-## 4. URL / Attachment Analysis
-
-Making sure the URLs and attachments inside the mail are not malicious by using platforms like VirusTotal and sandboxes.
-
-## 5. Identifying Hidden Artifacts
-
-This includes tracking pixels, malformed headers, and filter evasion content blocks.
-
-## 6. IOC Extraction
-
-Every case study ends with a consolidated Indicators of Compromise table: sending domains, IPs, tracking domains, malicious URLs, and file hashes. These are also compiled centrally in [`../iocs/all-cases-iocs.csv`](../iocs/all-cases-iocs.csv).
-
-## 7. MITRE ATT&CK Mapping
-
-Each case is tagged with the relevant ATT&CK techniques, giving the analysis a standardized vocabulary that maps to how security teams categorize and share threat intelligence.
-
-## 8. Cross-Case Correlation
-
-Where possible, check whether artifacts from one sample (tracking IDs, domain naming patterns, digit sequences embedded in URLs) reappear in other samples. Shared infrastructure or a shared toolkit across seemingly unrelated brand templates is one of the strongest findings a triage process can surface — it indicates a single actor or kit behind multiple campaigns rather than isolated incidents.
+These samples were collected for educational security-research purposes. All content is defanged. This repository does not host any functional malware or live phishing infrastructure.
