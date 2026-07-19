@@ -1,8 +1,4 @@
-Phishing Email Report 5 — "Banco do Brasil" Gmail PDF Email
-
-New to this series? Start with Part 1, where I break down the exact framework I use to analyze phishing emails like a SOC analyst. Previously in this series: Part 4 — "Facebook Login Attempt" Email.
-
-Full raw email (sanitized) and screenshots for this case: [GitHub link]
+# Phishing Email Report 5 — "Banco do Brasil" Gmail PDF Email
 
 **What this email is trying to do:** It poses as a Banco do Brasil consumer-service notice claiming there are unclaimed funds tied to the recipient's CPF (Brazilian Tax ID), pushing them to open an attached PDF within a 48-hour deadline.
 
@@ -17,11 +13,11 @@ Full raw email (sanitized) and screenshots for this case: [GitHub link]
 | DMARC | pass | The From address domain (gmail.com) matches the domain that passed SPF/DKIM, so alignment genuinely checks out. |
 | X-MS-Exchange-Organization-SCL | 1 (low) | SCL (Spam Confidence Level) — because the mail is truly from Gmail, Microsoft's filter doesn't flag it as risky. |
 
-**Important Point to Note:** All three checks passing does not mean this email is safe. DMARC only checks that the domain in the From address (gmail.com) matches the domain that sent the mail — it says nothing about the display name. And the display name here is doing all the lying: "Banco do Brasil (no-reply@bb.com.br) | SVR - Consulta de valores a receber | Atendimento: 691076456020794" — a fake bank name, a fake email address, and a fake reference number, all stuffed into the display name field, while the real address underneath is a random Gmail account. Anyone can make a free Gmail account and pass real authentication — Google is confirming "this came from Gmail," not "this came from Banco do Brasil."
+**Important Point to Note:** All three checks passing does not mean this email is safe. DMARC only checks that the domain in the From address (gmail.com) matches the domain that sent the mail it says nothing about the display name. And the display name here is doing all the lying: "Banco do Brasil (no-reply@bb.com.br) | SVR Consulta de valores a receber | Atendimento: 691076456020794" a fake bank name, a fake email address, and a fake reference number, all stuffed into the display name field, while the real address underneath is a random Gmail account. Anyone can make a free Gmail account and pass real authentication Google is confirming "this came from Gmail," not "this came from Banco do Brasil."
 
 ## 2. Sender / Domain Check
 
-The From field says "Banco do Brasil," but the real email address is qazwes332@gmail.com — a personal Gmail account, nowhere close to Banco do Brasil at all. The Return-Path is also qazwes332@gmail.com — matching the From address exactly, consistent with this being sent from a genuine, ordinary Gmail account rather than a spoofed one. A real bank would never send official notices from a personal Gmail address — it must have its own domain (bb.com.br), not some random unrelated one.
+The From field says "Banco do Brasil," but the real email address is qazwes332@gmail.com — a personal Gmail account, nowhere close to Banco do Brasil at all. The Return-Path is also qazwes332@gmail.com matching the From address exactly, consistent with this being sent from a genuine, ordinary Gmail account rather than a spoofed one. A real bank would never send official notices from a personal Gmail address it must have its own domain (bb.com.br), not some random unrelated one.
 
 ## 3. Email Body Check
 
@@ -29,15 +25,14 @@ The email tries to tempt the reader by saying there are "amounts to be received"
 
 ## 4. Links and Attachment Analysis
 
-This email has no clickable web links — instead, it delivers a PDF attachment named Informativo-Online_nMFMPPVC4Ye7Eek4CDBCy1uJFqpHeoaCgwN.pdf. The random alphanumeric text in the filename is suspicious — no legitimate organization sends attachments named like that.
+This email has no clickable web links instead, it delivers a PDF attachment named Informativo-Online_nMFMPPVC4Ye7Eek4CDBCy1uJFqpHeoaCgwN.pdf. The random alphanumeric text in the filename is suspicious no legitimate organization sends attachments named like that.
 
-VirusTotal and Hybrid Analysis both marked the file as "clean" — but this does not mean it's safe. The PDF is password-protected/encrypted, and VirusTotal itself notes: "This file is password-protected, security vendors may not have been able to look into it." In other words, the scanners couldn't see inside the file at all — "clean" here means "unscannable," not "safe." The password ("1010") is handed to the victim directly in the email body, meaning only a human who reads the email can unlock it — automated security tools cannot.
+VirusTotal and Hybrid Analysis both marked the file as "clean" but this does not mean it's safe. The PDF is password-protected/encrypted, and VirusTotal itself notes: "This file is password-protected, security vendors may not have been able to look into it." In other words, the scanners couldn't see inside the file at all "clean" here means "unscannable," not "safe." The password ("1010") is handed to the victim directly in the email body, meaning only a human who reads the email can unlock it automated security tools cannot.
 
 ## 5. Hidden Artifacts
 
-The PDF's internal structure contains a hidden clickable link covering the entire page (a Link annotation with a URI action, sized to the full page). Because the file is encrypted, the actual destination of that link is also encrypted and can't be read without the password — meaning opening the PDF and clicking anywhere on the page could trigger a hidden link that no scanner has ever inspected.
+The PDF's internal structure contains a hidden clickable link covering the entire page (a Link annotation with a URI action, sized to the full page). Because the file is encrypted, the actual destination of that link is also encrypted and can't be read without the password meaning opening the PDF and clicking anywhere on the page could trigger a hidden link that no scanner has ever inspected.
 
-The email subject line, once decoded, reads "Serviço de Atendimento ao Consumidor - Informativo Online: xxlAdImgD1bPvrF)" — and that same token, xxlAdImgD1bPvrF, reappears inside the body's "Authorization Key" field. This is a tracking ID stamped into more than one part of the message, similar to the shared tracking numbers found in other emails in this series.
 
 ## 6. IOC (Indicators of Compromise) Table
 
@@ -60,4 +55,4 @@ The email subject line, once decoded, reads "Serviço de Atendimento ao Consumid
 | Obfuscated Files or Information: Encrypted/Encoded File | T1027.013 | Defense Evasion | PDF encrypted specifically to block AV/sandbox inspection |
 | Establish Accounts: Email Accounts | T1585.002 | Resource Development | Free Gmail account used as the sending identity |
 
-**Final Verdict:** This email pretends to be an official Banco do Brasil notice, but everything about it is fake. SPF, DKIM, and DMARC all pass — not because the email is legitimate, but because it was genuinely sent through a personal Gmail account and Gmail is honestly authenticating itself, not the bank. The attachment is a deliberately encrypted PDF designed to block security scanners from seeing what's inside, and it hides a full-page clickable link that only unlocks with a password supplied by the scammer. So the conclusion is it's a Phishing email.
+**Final Verdict:** This email pretends to be an official Banco do Brasil notice, but everything about it is fake. SPF, DKIM, and DMARC all pass not because the email is legitimate, but because it was genuinely sent through a personal Gmail account and Gmail is honestly authenticating itself, not the bank. The attachment is a deliberately encrypted PDF designed to block security scanners from seeing what's inside, and it hides a full-page clickable link that only unlocks with a password supplied by the scammer. So the conclusion is it's a Phishing email.
