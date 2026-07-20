@@ -41,7 +41,7 @@ This includes tracking pixels, malformed headers, and filter evasion content blo
 
 ## 6. IOC Extraction
 
-Every case study ends with a consolidated Indicators of Compromise table: sending domains, IPs, tracking domains, malicious URLs, and file hashes. These are also compiled centrally in [`../iocs/all-cases-iocs.csv`](../iocs/all-cases-iocs.csv).
+Every case study ends with a consolidated Indicators of Compromise table: sending domains, IPs, tracking domains, malicious URLs, and file hashes.
 
 ## 7. MITRE ATT&CK Mapping
 
