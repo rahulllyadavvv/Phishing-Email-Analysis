@@ -47,6 +47,3 @@ Every case study ends with a consolidated Indicators of Compromise table: sendin
 
 Each case is tagged with the relevant ATT&CK techniques, giving the analysis a standardized vocabulary that maps to how security teams categorize and share threat intelligence.
 
-## 8. Cross-Case Correlation
-
-Where possible, check whether artifacts from one sample (tracking IDs, domain naming patterns, digit sequences embedded in URLs) reappear in other samples. Shared infrastructure or a shared toolkit across seemingly unrelated brand templates is one of the strongest findings a triage process can surface — it indicates a single actor or kit behind multiple campaigns rather than isolated incidents.
