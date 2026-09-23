@@ -10,7 +10,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CommaList = Annotated[list[str], NoDecode]
@@ -54,6 +54,9 @@ class Settings(BaseSettings):
 
     # API authentication for the FastAPI backend (None disables auth checks for local use).
     phishlens_api_key: SecretStr | None = None
+
+    # Largest accepted input (email or file), in megabytes.
+    max_input_size_mb: float = Field(default=25.0, gt=0)
 
     # Infrastructure.
     redis_url: str = "redis://localhost:6379/0"

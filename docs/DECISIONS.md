@@ -77,3 +77,27 @@
 - The QR code is generated with `segno` (pure Python, added to the `dev` extras). `pyyaml` was
   added to the main dependencies because the YAML data files need it.
 - Serialization uses LF line endings (the `email` default). Mail clients and editors accept them.
+
+## P1.1: Email loader
+
+- Detection uses only the content. The file extension and `filename` are never trusted, and
+  `filename` only appears in error messages.
+- `.eml` detection: every line up to the first blank line (checking at most 50 lines / 64 KB) must be
+  an RFC 5322 header field or a folded continuation line. There must be at least two fields, and one
+  of them must be a common mail header (From, Sender, Reply-To, Subject, Received, Return-Path,
+  Message-ID, MIME-Version, Delivered-To). A UTF-8 BOM, leading blank lines and an mbox `From `
+  separator line are allowed. If a NUL byte is present, the input is not an email.
+- `.msg` detection: the data starts with the OLE signature and `extract_msg.openMsg` opens it as a
+  message type that has `asEmailMessage`. Other OLE files (`.doc`, `.xls`, corrupt files, other
+  MAPI types without `asEmailMessage`) load as `"file"`.
+- Conversion uses extract-msg's own `asEmailMessage()` (headers, plain/HTML bodies, attachments,
+  embedded messages), serialized with `email.policy.default`. If a message is recognized but
+  conversion fails, the loader raises `MsgConversionError`. It is not silently treated as a file.
+- `load_input` must return a 2-tuple, so the missing-transport-headers warning is carried inside
+  the converted bytes as the header `X-PhishLens-Parse-Warning: msg_no_transport_headers: ...`.
+  The parser (P1.2) should move this header into `ParsedEmail.parse_warnings`.
+- Size limit: new setting `MAX_INPUT_SIZE_MB` (float, default 25, must be > 0). Inputs over the
+  limit raise `InputTooLargeError`. For paths, the size is checked with `stat()` before the file is read.
+  `LoaderError` (a `ValueError`) is the base class for loader errors.
+- extract-msg cannot write `.msg` files and no `.msg` fixture exists, so the `.msg` tests mock
+  `extract_msg.openMsg`. The corrupt-OLE test uses the real library.
