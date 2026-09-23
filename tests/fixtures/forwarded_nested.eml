@@ -1,0 +1,48 @@
+Return-Path: <colleague@recipient.example>
+Received: from mail.recipient.example ([198.51.100.5]) by mx.recipient.example
+ with ESMTPS id forwarde; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=recipient.example; dkim=pass header.d=recipient.example;
+ dmarc=pass header.from=recipient.example
+From: Colleague <colleague@recipient.example>
+To: security-team@recipient.example
+Subject: Fwd: Unusual sign-in activity on your account
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <forwarded-0013@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==phishlens-forwarded_nested-0=="
+
+--==phishlens-forwarded_nested-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi, I received the attached email. Is it legitimate?
+
+--==phishlens-forwarded_nested-0==
+Content-Type: message/rfc822; boundary="==phishlens-forwarded_nested-1=="
+Content-Transfer-Encoding: 8bit
+MIME-Version: 1.0
+Content-Disposition: attachment
+
+Return-Path: <mailer@zetatech.xyz>
+Received: from mail.zetatech.xyz ([203.0.113.45]) by mx.recipient.example with
+ ESMTPS id spoof-un; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=zetatech.xyz; dkim=none; dmarc=fail header.from=microsoft.com
+From: Microsoft Account Team <account-security@microsoft.com>
+To: victim@recipient.example
+Subject: Unusual sign-in activity on your account
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <spoof-unaligned-0002@phishlens.test>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+We detected an unusual sign-in to your account.
+
+If this was not you, review your recent activity at
+http://account-review.zetatech.example/verify
+
+Microsoft Account Team
+
+--==phishlens-forwarded_nested-0==--

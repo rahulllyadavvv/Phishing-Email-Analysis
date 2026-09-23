@@ -1,0 +1,33 @@
+Return-Path: <office@projects.example>
+Received: from mail.projects.example ([198.51.100.30]) by mx.recipient.example
+ with ESMTPS id zip-atta; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=projects.example; dkim=pass header.d=projects.example;
+ dmarc=pass header.from=projects.example
+From: Project Office <office@projects.example>
+To: team@recipient.example
+Subject: Meeting notes (zipped)
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <zip-attachment-0007@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==phishlens-zip_attachment-0=="
+
+--==phishlens-zip_attachment-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi team,
+
+The meeting notes are attached as a zip file.
+
+--==phishlens-zip_attachment-0==
+Content-Type: application/zip
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="notes.zip"
+MIME-Version: 1.0
+
+UEsDBBQAAAAIAABIJ11TLsYfNAAAADgAAAAJAAAAbm90ZXMudHh0801NLcnMS1fIyy9JLbYCURkg
+bkm+QnFqqkJGalGqnoJHYlFuTmpxsQJQSYlCWmZOqh4XAFBLAQIUAxQAAAAIAABIJ11TLsYfNAAA
+ADgAAAAJAAAAAAAAAAAAAACkAQAAAABub3Rlcy50eHRQSwUGAAAAAAEAAQA3AAAAWwAAAAAA
+
+--==phishlens-zip_attachment-0==--

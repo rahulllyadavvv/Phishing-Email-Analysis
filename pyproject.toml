@@ -44,6 +44,7 @@ dependencies = [
     "sqlmodel",
     "typer",
     "rich",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
@@ -52,6 +53,7 @@ dev = [
     "pytest-asyncio",
     "respx",
     "ruff",
+    "segno",
 ]
 
 [tool.setuptools.packages.find]

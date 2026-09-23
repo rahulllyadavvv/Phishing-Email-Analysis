@@ -1,0 +1,17 @@
+Return-Path: <billing@invoices.example>
+Received: from mail.invoices.example ([198.51.100.77]) by mx.recipient.example
+ with ESMTPS id dup00004; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example;
+ spf=pass smtp.mailfrom=invoices.example; dkim=pass header.d=invoices.example;
+ dmarc=fail header.from=invoices.example
+From: Billing <billing@invoices.example>
+From: IT Helpdesk <helpdesk@recipient.example>
+To: user@recipient.example
+Subject: Outstanding invoice
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <duplicate-from-0004@phishlens.test>
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Please see the outstanding invoice and confirm payment details.

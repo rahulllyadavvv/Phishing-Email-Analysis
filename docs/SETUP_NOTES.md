@@ -15,3 +15,9 @@ On Apple Silicon you may also need `export DYLD_FALLBACK_LIBRARY_PATH=/opt/homeb
 so the Python packages can find Homebrew libraries.
 
 yara-python installed from a wheel and imports correctly.
+
+## P0.4
+
+- `tests/test_make_fixtures.py::test_qr_code_decodes` is skipped when zbar is missing.
+- `tests/fixtures/eicar_attachment.eml` contains the EICAR antivirus test string (base64).
+  Desktop antivirus may quarantine it. If it does, add an exclusion for `tests/fixtures/`.

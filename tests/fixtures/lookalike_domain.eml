@@ -1,0 +1,25 @@
+Return-Path: <security@micros0ft-support.example>
+Received: from mail.micros0ft-support.example ([203.0.113.33]) by
+ mx.recipient.example with ESMTPS id lookalik; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=micros0ft-support.example; dkim=pass
+ header.d=micros0ft-support.example; dmarc=pass
+ header.from=micros0ft-support.example
+From: Microsoft Support <security@micros0ft-support.example>
+To: user@recipient.example
+Subject: URGENT: Your password expires in 24 hours
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <lookalike-0006@phishlens.test>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+URGENT ACTION REQUIRED
+
+Your password expires in 24 hours. Reset your password immediately or your ac=
+count
+will be suspended and all data will be lost.
+
+Reset now: http://micros0ft-support.example/reset-password
+
+Microsoft Support

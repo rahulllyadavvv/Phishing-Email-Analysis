@@ -1,0 +1,33 @@
+Return-Path: <deals@promo-offers.example>
+Received: from mail.promo-offers.example ([203.0.113.110]) by
+ mx.recipient.example with ESMTPS id tracking; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=promo-offers.example; dkim=pass header.d=promo-offers.example;
+ dmarc=pass header.from=promo-offers.example
+From: Deals <deals@promo-offers.example>
+To: user@recipient.example
+Subject: Exclusive offer just for you
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <tracking-pixel-0011@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="==phishlens-tracking_pixel-0=="
+
+--==phishlens-tracking_pixel-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Exclusive offer just for you. View this email in HTML.
+
+--==phishlens-tracking_pixel-0==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><p>Exclusive offer just for you! Save 50% this week.</p><div styl=
+e=3D"display:none;font-size:0;color:#ffffff">invoice payment account verified=
+ safe legitimate newsletter</div><span style=3D"font-size:0px">hidden filler =
+text to confuse filters</span><img src=3D"http://track.promo-offers.example/o=
+pen.gif?id=3Dabc123" width=3D"1" height=3D"1" alt=3D"" style=3D"border:0"></b=
+ody></html>
+
+--==phishlens-tracking_pixel-0==--
