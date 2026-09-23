@@ -101,3 +101,27 @@
   `LoaderError` (a `ValueError`) is the base class for loader errors.
 - extract-msg cannot write `.msg` files and no `.msg` fixture exists, so the `.msg` tests mock
   `extract_msg.openMsg`. The corrupt-OLE test uses the real library.
+
+## P1.2: Header and address parsing
+
+- Entry point is `parse_headers(raw: bytes) -> ParsedEmail`. It fills `headers`, the address
+  fields, `subject`, `date`, `message_id`, `raw_bytes`, `sha256` and `parse_warnings`. Later
+  parser steps fill in the bodies, Received chain and attachments.
+- Header values are decoded with `policy.default.header_fetch_parse` on `msg.raw_items()`, so
+  duplicates and the original order are kept. Folded values are unfolded. If decoding raises, the
+  parser falls back to `email.header.decode_header`, and after that to the raw unfolded text.
+- Warnings are `"<code>: <detail>"` strings. The codes are `missing_from`, `empty_from`,
+  `multiple_from_headers`, `multiple_from_addresses`, `display_name_contains_email`,
+  `header_decode_error` (an exception, or U+FFFD in the decoded text) and `header_defect`
+  (defects reported by the `email` package, such as an unknown charset).
+- `display_name_contains_email` is checked on From, Sender and Reply-To. It is not raised when the
+  address in the display name matches the real address (case-insensitive), because some mail
+  clients use the address itself as the display name.
+- `from_addrs` holds the addresses from every From header, in order. `sender` and `return_path`
+  take the first address. `Return-Path: <>` (null sender) gives `return_path = None`.
+- The loader's `X-PhishLens-Parse-Warning` header moves into `parse_warnings` and is removed from
+  `headers`.
+- `org_domain` uses `tldextract` with the bundled public suffix snapshot
+  (`suffix_list_urls=()`, no cache dir), so it never uses the network. Domains without a known
+  public suffix (reserved `.example` / `.test`, single labels) fall back to the last two labels.
+  IP literals are returned unchanged. `domain` is lowercased. The local part is kept as written.
