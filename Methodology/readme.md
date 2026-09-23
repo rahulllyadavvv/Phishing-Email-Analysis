@@ -35,15 +35,7 @@ We will check if the mail is trying to create a panic situation / urgency or try
 
 Making sure the URLs and attachments inside the mail are not malicious by using platforms like VirusTotal and sandboxes.
 
-## 5. Identifying Hidden Artifacts
-
-This includes tracking pixels, malformed headers, and filter evasion content blocks.
-
-## 6. IOC Extraction
-
-Every case study ends with a consolidated Indicators of Compromise table: sending domains, IPs, tracking domains, malicious URLs, and file hashes.
-
-## 7. MITRE ATT&CK Mapping
+## 5. MITRE ATT&CK Mapping
 
 Each case is tagged with the relevant ATT&CK techniques, giving the analysis a standardized vocabulary that maps to how security teams categorize and share threat intelligence.
 
