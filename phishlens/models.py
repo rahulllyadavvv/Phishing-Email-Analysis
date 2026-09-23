@@ -87,9 +87,9 @@ class Address(_Model):
 
 
 class ReceivedHop(_Model):
-    """One parsed ``Received`` header. The chain is ordered as it appears in the email
-    (newest hop first). Fields that could not be parsed are ``None``; ``raw`` always holds
-    the original header value."""
+    """One parsed ``Received`` header. The chain is ordered oldest hop first (the reverse
+    of the header order in the email). Fields that could not be parsed are ``None``; ``raw``
+    always holds the original header value."""
 
     from_host: str | None = None
     by_host: str | None = None

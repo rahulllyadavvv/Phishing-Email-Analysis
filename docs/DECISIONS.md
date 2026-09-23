@@ -125,3 +125,32 @@
   (`suffix_list_urls=()`, no cache dir), so it never uses the network. Domains without a known
   public suffix (reserved `.example` / `.test`, single labels) fall back to the last two labels.
   IP literals are returned unchanged. `domain` is lowercased. The local part is kept as written.
+
+## P1.3: Received chain
+
+- Entry points: `parse_received(value) -> ReceivedHop` (one header),
+  `parse_received_chain(values) -> (chain, warnings)` (values in header order, newest first) and
+  `received_chain_from_headers(ParsedEmail.headers)`. The chain is returned **oldest first**. The
+  `ReceivedHop` docstring in `models.py` said "newest first" and was changed to match. Filling
+  `ParsedEmail.received_chain` is left to the parser step that puts the parts together.
+- The header is split at the last `;` into the clauses and the timestamp. Clause keywords (`from`,
+  `by`, `via`, `with`, `id`, `for`) only count outside parentheses, so a comment such as
+  "(Authenticated by ...)" does not start a `by` clause. `from_host` is the HELO name (the first
+  token after `from`). It is `None` when the HELO is a bracketed IP literal.
+- The IP is taken only from the `from` clause. Bracketed parts (`[1.2.3.4]`, `[IPv6:...]`) come
+  first, then any bare token that parses as an IP. IPv4-mapped IPv6 addresses are turned into
+  IPv4. Timestamps with no zone are treated as UTC so they can be compared.
+- Warning codes: `received_no_ip` (every hop with no parsable IP, including `by`-only local
+  hops) and `received_out_of_order` (a hop's timestamp is strictly earlier than the timestamp of
+  the last earlier hop that had one). There is no clock-skew tolerance.
+- `originating_external_ip(chain, trusted_internal_hosts)` returns an IP string. It walks from
+  the newest hop back towards the sender and returns the first hop that is not internal. A hop
+  is internal when its IP is private, loopback, link-local, multicast, reserved, unspecified or
+  CGNAT, or when its IP or `from` host matches `trusted_internal_hosts`. That list can hold IPs,
+  CIDRs, host names or domains, and a domain also matches its subdomains. Walking from the
+  newest hop means a forged older hop cannot become the result. The result is the IP that handed
+  the message to our infrastructure. Without trust config, a public IP on our own MX would be
+  returned.
+- Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32) count as
+  **external**, even though Python's `ipaddress` calls them private. This is because the
+  synthetic fixtures use them in place of public IPs.
