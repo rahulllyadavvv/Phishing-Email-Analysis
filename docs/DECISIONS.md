@@ -154,3 +154,32 @@
 - Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32) count as
   **external**, even though Python's `ipaddress` calls them private. This is because the
   synthetic fixtures use them in place of public IPs.
+
+## P1.4: Bodies and URL extraction
+
+- Entry points in `phishlens/parser/body.py`: `parse_bodies(raw) -> BodyParts` (text body, HTML
+  body, URLs, warnings), plus `extract_bodies(msg)`, `html_to_text(html)`, `extract_urls(text,
+  html)` and `normalize_url(url)`. Filling `ParsedEmail.text_body` / `html_body` / `urls` is left
+  to the parser step that puts the parts together (same as P1.3).
+- Body parts: every `text/plain` / `text/html` leaf that is not `Content-Disposition: attachment`.
+  Nested `message/*` parts are skipped (they become `nested_emails` in P1.5). Several parts of the
+  same type are joined with a newline. A missing charset means UTF-8. An unknown charset falls
+  back to UTF-8 (`unknown_charset` warning). Bytes that are invalid in the charset are replaced
+  (`charset_decode_error` warning). MIME defects are reported as `mime_defect` warnings.
+- The text body is derived from the HTML only when there is no non-empty plain text part.
+  `script`, `style`, `noscript`, `template` and `head` are dropped. The HTML is parsed with the
+  stdlib `html.parser` backend (no lxml dependency).
+- "Keep all sources for each URL": `UrlRef` has one `source`, so deduplication is by
+  `(url, source, visible_text)`. A URL found in both the text body and an href gives two
+  `UrlRef`s. The same href with different link texts also gives one ref per text, so mismatches
+  are never hidden.
+- Added `UrlSource.META_REFRESH` for `<meta http-equiv="refresh">` targets. `img`, `script` and
+  `iframe` src map to `HTML_SRC`. `a` and `area` href map to `HTML_HREF`, and their visible text is
+  the link text with whitespace collapsed (`None` if the link has no text, e.g. an image link).
+- Normalization: control characters and whitespace are removed, and `www.` links get `http://`.
+  Scheme and host are lowercased (userinfo, path and query are kept as written), trailing dots on
+  the host and default ports are removed, and an empty path becomes `/`. Only absolute `http`,
+  `https` and `ftp` URLs are kept. `mailto:`, `javascript:`, `data:`, `cid:` and relative URLs are
+  dropped (`<base href>` is not applied). IDN hosts are kept in Unicode.
+- Text-body regex: `http(s)://`, `ftp://` or `www.` up to whitespace, quotes or angle brackets.
+  Trailing sentence punctuation and unbalanced closing brackets are stripped.

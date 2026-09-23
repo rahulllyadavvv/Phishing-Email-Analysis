@@ -34,6 +34,7 @@ class UrlSource(StrEnum):
     HTML_HREF = "html_href"
     HTML_SRC = "html_src"
     FORM_ACTION = "form_action"
+    META_REFRESH = "meta_refresh"
     ATTACHMENT = "attachment"
     QR_CODE = "qr_code"
     ARTIFACT = "artifact"
