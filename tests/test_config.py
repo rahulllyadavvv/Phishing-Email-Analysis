@@ -1,0 +1,94 @@
+from collections.abc import Iterator
+
+import pytest
+
+from phishlens.config import SERVICE_FIELDS, Settings, get_settings
+
+ENV_VARS = [
+    "VIRUSTOTAL_API_KEY",
+    "ABUSECH_API_KEY",
+    "GOOGLE_SAFEBROWSING_API_KEY",
+    "URLSCAN_API_KEY",
+    "ABUSEIPDB_API_KEY",
+    "HYBRID_ANALYSIS_API_KEY",
+    "CAPE_BASE_URL",
+    "LLM_API_KEY",
+    "UPLOAD_FILES_TO_VT",
+    "PHISHLENS_API_KEY",
+    "REDIS_URL",
+    "DATABASE_URL",
+    "TRUSTED_AUTHSERV_IDS",
+    "TRUSTED_INTERNAL_HOSTS",
+    "TRUSTED_ARC_SEALERS",
+]
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[None]:
+    for name in ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # Run from an empty directory so no real .env file is picked up.
+    monkeypatch.chdir(tmp_path)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_defaults_without_env_file() -> None:
+    settings = get_settings()
+    assert settings.virustotal_api_key is None
+    assert settings.cape_base_url is None
+    assert settings.upload_files_to_vt is False
+    assert settings.redis_url == "redis://localhost:6379/0"
+    assert settings.database_url == "sqlite:///phishlens.sqlite"
+    assert settings.trusted_authserv_ids == []
+    assert not any(settings.configured_services().values())
+
+
+def test_get_settings_is_cached() -> None:
+    assert get_settings() is get_settings()
+
+
+def test_env_values_and_comma_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "test-key-not-real")
+    monkeypatch.setenv("CAPE_BASE_URL", "http://cape.test")
+    monkeypatch.setenv("UPLOAD_FILES_TO_VT", "true")
+    monkeypatch.setenv("TRUSTED_AUTHSERV_IDS", "mx.example.com, MX2.Example.com ,,")
+    settings = Settings()
+    assert settings.is_enabled("virustotal")
+    assert settings.is_enabled("cape")
+    assert not settings.is_enabled("urlscan")
+    assert settings.upload_files_to_vt is True
+    assert settings.trusted_authserv_ids == ["mx.example.com", "mx2.example.com"]
+
+
+def test_empty_values_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ENV_VARS:
+        monkeypatch.setenv(name, "")
+    settings = Settings()
+    assert settings.upload_files_to_vt is False
+    assert settings.redis_url == "redis://localhost:6379/0"
+    assert not any(settings.configured_services().values())
+
+
+def test_env_file_is_loaded(tmp_path) -> None:
+    (tmp_path / ".env").write_text("URLSCAN_API_KEY=test-key-not-real\n")
+    assert Settings().is_enabled("urlscan")
+
+
+def test_keys_are_not_exposed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ABUSEIPDB_API_KEY", "super-secret-test-value")
+    settings = Settings()
+    assert "super-secret-test-value" not in repr(settings)
+    assert "super-secret-test-value" not in str(settings.model_dump())
+    assert "super-secret-test-value" not in str(settings.configured_services())
+
+
+def test_unknown_service_raises() -> None:
+    with pytest.raises(KeyError):
+        Settings().is_enabled("nope")
+
+
+def test_service_fields_exist() -> None:
+    for field in SERVICE_FIELDS.values():
+        assert field in Settings.model_fields

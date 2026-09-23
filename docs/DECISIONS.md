@@ -31,3 +31,21 @@
   can still be valid.
 - All models use `extra="forbid"` so typos in field names fail fast. `created_at` defaults to
   the current UTC time.
+
+## P0.3: Config and CLAUDE.md
+
+- API keys (and `PHISHLENS_API_KEY`) are `SecretStr | None` so they never appear in repr, logs or
+  `model_dump()`. `CAPE_BASE_URL` is a plain `str | None`, because it is a URL and not a secret.
+- `env_ignore_empty=True`: blank values in `.env` (as in `.env.example`) fall back to the defaults.
+  This also means `UPLOAD_FILES_TO_VT=` means `false`.
+- `TRUSTED_*` lists are comma-separated strings. They are split, stripped and lower-cased into
+  `list[str]` (using `NoDecode` so pydantic-settings does not try to parse them as JSON).
+- `Settings.is_enabled(service)` / `configured_services()` use a `SERVICE_FIELDS` map
+  (virustotal, abusech, google_safebrowsing, urlscan, abuseipdb, hybrid_analysis, cape, llm).
+  An unknown service name raises `KeyError`, because that is a programming error.
+- `get_settings()` uses `lru_cache(maxsize=1)`. Tests call `get_settings.cache_clear()`.
+  `.env` is read relative to the current working directory. `extra="ignore"` so that unrelated
+  variables in `.env` do not break startup.
+- Rate-limit and cache TTL settings are not added yet. P4.1 will add them to config.
+- The CLAUDE.md commands for the API and UI (`uvicorn api.main:app`, `streamlit run ui/app.py`)
+  name modules that later phases will create.
