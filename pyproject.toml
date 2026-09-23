@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phishlens"
+version = "0.1.0"
+description = "Automated phishing email analysis tool"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic",
+    "pydantic-settings",
+    "dnspython",
+    "pyspf",
+    "dkimpy",
+    "checkdmarc",
+    "authres",
+    "tldextract",
+    "rapidfuzz",
+    "httpx",
+    "beautifulsoup4",
+    "python-magic",
+    "extract-msg",
+    "oletools",
+    "msoffcrypto-tool",
+    "pypdf",
+    "pefile",
+    "LnkParse3",
+    "yara-python",
+    "pyzbar",
+    "Pillow",
+    "iocextract",
+    "stix2",
+    "mitreattack-python",
+    "jinja2",
+    "weasyprint",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "streamlit",
+    "redis",
+    "rq",
+    "sqlmodel",
+    "typer",
+    "rich",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "respx",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+include = ["phishlens*", "api*", "ui*"]
+
+[tool.setuptools.package-data]
+"phishlens.reporting" = ["templates/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["samples", "quarantine", "reports", "autopilot.py", "progress.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
