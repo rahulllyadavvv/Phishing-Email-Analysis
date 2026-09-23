@@ -183,3 +183,38 @@
   dropped (`<base href>` is not applied). IDN hosts are kept in Unicode.
 - Text-body regex: `http(s)://`, `ftp://` or `www.` up to whitespace, quotes or angle brackets.
   Trailing sentence punctuation and unbalanced closing brackets are stripped.
+
+## P1.5: Attachment and nested email extraction
+
+- Entry points: `phishlens/parser/attachments.py` has `extract_attachments(msg) -> ExtractedParts`
+  (attachments, inline images, nested messages, warnings) and `make_attachment(filename, data,
+  ...)`, which hashes md5/sha1/sha256 so it can be reused for files unpacked in Phase 6.
+  `phishlens.parser.parse_email(raw_bytes) -> ParsedEmail` puts headers, Received chain, bodies,
+  URLs and attachments together. The P1.3/P1.4 fields (`received_chain`, `text_body`,
+  `html_body`, `urls`) are filled here. `auth_results_headers` is filled with the values of every
+  `Authentication-Results` header in order (`ARC-Authentication-Results` is not included).
+- Classification of leaf parts: `text/plain` / `text/html` without `Content-Disposition:
+  attachment` are bodies (same rule as `body.py`) and are skipped. `image/*` parts that are not
+  `attachment` (inline, or no disposition, e.g. `multipart/related` images) go to
+  `inline_images`. `message/rfc822` and `message/global` become `nested_emails`. Every other
+  leaf part, including inline non-image parts and other `message/*` types, is an attachment.
+  Nested emails are not also listed as attachments.
+- Filename: `Content-Disposition` filename, then the `Content-Type` `name` parameter (RFC 2231 /
+  encoded words decoded, whitespace collapsed, otherwise kept as declared so double extensions
+  stay visible). If there is none, it becomes `part-<n><ext>`, where `n` is the 1-based index of
+  the non-body leaf part, and the extension is guessed from the MIME type (`.eml` for messages,
+  `.bin` if unknown).
+- `declared_type` is the part's `Content-Type`. `detected_type` stays `None` (content sniffing
+  comes later). `depth` stays 0 and `parent` stays `None` for MIME attachments. Those fields
+  describe archive nesting (Phase 6). Attachments of a nested email are in that nested
+  `ParsedEmail`, not in the outer one.
+- Nested emails: the standard library does not keep the original bytes of a `message/rfc822`
+  part, so the inner message is re-serialized (`policy.default` with no header refolding) and
+  parsed from those bytes. Its `sha256` / `raw_bytes` are for the re-serialized form, which may
+  differ from the original bytes in line endings. The top-level email is depth 0, and nested
+  emails are parsed down to depth 3 (`MAX_NESTED_DEPTH`). A message below that is kept as a
+  plain `message/rfc822` attachment of the depth-3 email, with a `nested_depth_exceeded`
+  warning.
+- A payload that cannot be transfer-decoded gives an empty attachment and an
+  `attachment_decode_error` warning. An unexpected error during the walk is recorded as
+  `attachment_extract_error`, and the parts found so far are kept.
