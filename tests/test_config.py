@@ -53,6 +53,9 @@ def test_defaults_without_env_file() -> None:
     assert settings.dkim_max_age_days == 7.0
     assert settings.enrichment_timeout_seconds == 15.0
     assert settings.vt_malicious_threshold == 3
+    assert settings.upload_files_to_hybrid_analysis is False
+    assert settings.hybrid_analysis_environment_id == 160
+    assert settings.cape_api_token is None
     assert settings.urlscan_visibility == "unlisted"
     assert settings.urlscan_max_wait_seconds == 90.0
     assert settings.urlscan_reuse_days == 7

@@ -66,6 +66,7 @@ class Settings(BaseSettings):
     abuseipdb_api_key: SecretStr | None = None
     hybrid_analysis_api_key: SecretStr | None = None
     cape_base_url: str | None = None
+    cape_api_token: SecretStr | None = None  # only if your CAPE instance requires a token
     llm_api_key: SecretStr | None = None
 
     # Safety: files are only uploaded to VirusTotal when explicitly enabled.
@@ -73,6 +74,11 @@ class Settings(BaseSettings):
     # VirusTotal: this many engines flagging "malicious" makes the verdict malicious (fewer, or
     # any "suspicious" votes, make it suspicious).
     vt_malicious_threshold: int = Field(default=3, ge=1)
+    # Safety: Hybrid Analysis is a public third-party sandbox, so file submission to it is
+    # separately opt-in (hash searches are always allowed). CAPE is used whenever
+    # CAPE_BASE_URL is set (normally your own instance).
+    upload_files_to_hybrid_analysis: bool = False
+    hybrid_analysis_environment_id: int = 160  # 160 = Windows 10 64-bit
 
     # API authentication for the FastAPI backend (None disables auth checks for local use).
     phishlens_api_key: SecretStr | None = None

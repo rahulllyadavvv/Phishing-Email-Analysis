@@ -232,6 +232,29 @@ class EnrichmentResult(_Model):
     error: str | None = None
 
 
+class SandboxReport(_Model):
+    """Normalized dynamic-analysis report from an external sandbox.
+
+    ``status`` is ``done``, ``pending`` (still running), ``error`` or ``not_configured``.
+    ``verdict`` uses the ``EnrichmentStatus`` values; ``score`` is 0-100. Network indicators,
+    process names, dropped file SHA-256s and signature names are plain lists.
+    """
+
+    sandbox: str
+    task_id: str | None = None
+    status: str = "done"
+    verdict: EnrichmentStatus = EnrichmentStatus.UNKNOWN
+    score: float | None = None
+    processes: list[str] = Field(default_factory=list)
+    network_domains: list[str] = Field(default_factory=list)
+    network_ips: list[str] = Field(default_factory=list)
+    network_urls: list[str] = Field(default_factory=list)
+    dropped_hashes: list[str] = Field(default_factory=list)
+    signatures: list[str] = Field(default_factory=list)
+    link: str | None = None
+    error: str | None = None
+
+
 class IOC(_Model):
     """An indicator of compromise collected from the case.
 

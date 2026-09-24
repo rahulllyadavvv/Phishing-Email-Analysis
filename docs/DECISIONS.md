@@ -636,3 +636,33 @@ Plan reviewed and approved before building.
   tests passed without really intercepting anything. They now use the `respx_mock` fixture with
   `@pytest.mark.respx(assert_all_called=False)`. An autouse `no_network` fixture in
   `tests/conftest.py` also makes any real socket connection or name resolution fail the test.
+
+## P4.5: Sandbox clients and lookup order
+
+- `SandboxReport` lives in `phishlens/models.py`: sandbox, task id, status (`done`, `pending`,
+  `error`, `not_configured`), verdict (`EnrichmentStatus` values), score 0-100, and lists of
+  processes, network domains, IPs and URLs, dropped SHA-256s, signatures, plus link and error.
+- `SandboxClient(BaseClient, ABC)`: `submit(data, filename)` returns a task id, or a
+  `SandboxReport` saying why nothing was sent. `get_report(task_id)` never raises and returns
+  `pending` while the sandbox works. Both return `not_configured` with no network call when the
+  service is not set up. Reports are not cached, because they change until the task finishes.
+  Errors are scrubbed of secrets.
+- Safety beyond the plan: Hybrid Analysis is a public third party, so CLAUDE.md's "never upload
+  files to third parties" rule applies. Submitting also needs
+  `UPLOAD_FILES_TO_HYBRID_ANALYSIS=true` (new, default false). Report fetches need only the key.
+  CAPE runs whenever `CAPE_BASE_URL` is set, because that is normally your own instance and
+  setting the URL is itself the opt-in. New settings: `HYBRID_ANALYSIS_ENVIRONMENT_ID` (160,
+  Windows 10 64-bit) and an optional `CAPE_API_TOKEN` (`Authorization: Token ...`).
+- Hybrid Analysis (Falcon Sandbox API v2; it requires the `User-Agent: Falcon Sandbox` header):
+  `POST /submit/file` returns a `job_id`, then `GET /report/<id>/summary`. Verdict: malicious,
+  suspicious, "no specific threat" or whitelisted -> clean, else unknown. Score = `threat_score`.
+  `IN_QUEUE`/`IN_PROGRESS` -> pending.
+- CAPE (API v2): `tasks/create/file/`, `tasks/view/<id>/` (only `reported` is done; `failed_*`
+  is an error), `tasks/get/report/<id>/json/`. Verdict from `malscore` (0-10): malicious from 7,
+  suspicious from 4, else clean. Score = malscore × 10.
+- `phishlens/enrichment/lookup.py`: `url_reputation(url)` asks Safe Browsing -> URLhaus ->
+  VirusTotal. `hash_reputation(sha256)` asks MalwareBazaar -> VirusTotal. The chain stops at the
+  first `malicious`; anything else (unknown, error, not_configured) moves on to the next
+  service. Every result is returned in order, including `not_configured` ones, so reports show
+  what was checked. Because the blocklists never answer `clean` (P4.3), VirusTotal is only
+  reached when the earlier services had nothing.
