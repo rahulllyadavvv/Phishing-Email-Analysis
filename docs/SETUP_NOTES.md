@@ -55,3 +55,11 @@ Both are off unless configured, and the tests never need them:
   `LLM_TONE_ENABLED=true`. This sends the email subject and body (up to 50,000 characters) to
   Anthropic; each report records that in `raw["llm_warning"]`. `LLM_MODEL` defaults to
   `claude-opus-5`.
+
+## P9.3: MITRE ATT&CK data
+
+`python scripts/update_attack_data.py` downloads `enterprise-attack.json` (about 48 MB, 858
+techniques at the time of writing) from the MITRE CTI GitHub repository into `data/mitre/`
+(gitignored). Without it, technique names and tactics come from the fallback table in
+`data/mitre_rules.yaml`, and `test_every_technique_exists_in_attack_data` is skipped. Loading
+the file takes a few seconds; it is cached per process.

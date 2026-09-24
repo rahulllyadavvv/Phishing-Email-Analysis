@@ -1143,3 +1143,37 @@ Plan reviewed and approved before building.
 - `timestamp` pins created/modified/valid_from/published for reproducible output (tests).
 - Tests parse the bundle back with `stix2.parse(allow_custom=False)` and check every pattern with
   the official `stix2patterns` validator, which also checks hash formats.
+
+## P9.3: MITRE ATT&CK mapping
+
+- Rules live in `data/mitre_rules.yaml` (CLAUDE.md: tables in `data/`), loaded and validated by
+  `phishlens/mapping/mitre.py`. A rule has technique IDs (checked for the `Txxxx(.yyy)` form) and
+  exactly one condition: `any_of` (one finding is enough) or `all_of` (every item required; an
+  inner list means "one of these", so "lookalike_domain + domain_age_under_30_days" also accepts
+  the under-7-days finding). An optional `evidence` filter must match the finding's evidence, or
+  one of its `files`/`urls` entries (case-insensitive), e.g. `high_risk_file_type` only for
+  iso/img/vhd/vhdx -> T1553.005.
+- `map_findings(findings)` returns one `MitreTechnique` per technique, sorted by ID, with
+  `triggered_by` = the finding IDs that fired it across all rules. Names, tactics and URLs come
+  from the local ATT&CK Enterprise data (mitreattack-python `MitreAttackData`, cached).
+  Sub-technique names are shown as "Parent: Child". Without the data, the `techniques` fallback
+  table in the YAML is used and URLs are built from the ID. Both forms use MITRE's URL format
+  (no trailing slash).
+- Beyond the plan's list: `sandbox_malicious`/`pdf_launch_action`/`lnk_suspicious_command`/
+  `pe_executable_attachment` -> T1566.001 + T1204.002; `qr_code_url` -> T1566.002 + T1204.001;
+  `llm_impersonation` -> impersonation; `encoded_link`, `hidden_text`,
+  `zero_width_characters` -> T1027; `pe_packed` -> T1027.002; encrypted archive/Office findings
+  -> T1027.013; `auth_but_unaligned`, `spf/dkim_pass_unaligned` and
+  `forged_auth_results_header` -> T1566.
+- Checking against the current ATT&CK data (downloaded with `scripts/update_attack_data.py`)
+  showed two changes since the plan was written:
+  - **T1656 Impersonation is revoked** and replaced by **T1684.001 "Social Engineering:
+    Impersonation"**. The plan's `brand_impersonation, display_name_brand_spoof -> T1656` rule
+    therefore maps to T1684.001 (commented in the YAML).
+  - ATT&CK split the old `defense-evasion` tactic: these techniques now fall under `stealth`
+    (T1027.*, T1036.*, T1221, T1684.001), and T1553.005 under `defense-impairment`. The fallback
+    table matches the data.
+  A test fails if a rule names a missing or revoked technique, or if a fallback name or tactic
+  differs from the data. It is skipped when the data has not been downloaded.
+- `scripts/update_attack_data.py` streams the file to `.part`, checks that it is a STIX bundle,
+  then replaces the old file.

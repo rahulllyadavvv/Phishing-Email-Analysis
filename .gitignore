@@ -15,3 +15,6 @@ autopilot_run.log
 
 # Trained models (scripts/train_tone_model.py)
 models/
+
+# MITRE ATT&CK data (scripts/update_attack_data.py, ~45 MB)
+data/mitre/*.json
