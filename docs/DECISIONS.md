@@ -1280,3 +1280,31 @@ Plan reviewed and approved before building.
   analysis. The CLI/API turn that into a user-facing error.
 - The email and file pipelines share `run_analyzer` (timeouts, error results) and `build_report`
   (MITRE tagging, scoring, services).
+
+## P10.4: CLI
+
+- `phishlens/cli.py` (Typer + rich), entry point `phishlens = "phishlens.cli:main"` in
+  `pyproject.toml`, plus `python -m phishlens`.
+- `phishlens analyze <path>` routes by content (`analyze_input`); `phishlens analyze-file <path>`
+  forces file mode. Options: `--format/-f` (comma-separated), `--out/-o` (default `reports/`,
+  gitignored), `--no-network` (offline mode from P10.2: no DNS, reputation, sandbox or LLM).
+  Global `--verbose/-v` shows library log lines; by default they are silenced, because every
+  problem is already listed in the summary's "Errors" section (a stray RDAP 403 warning showed up
+  above the panel during a real run).
+- While running, a transient rich `Live` table shows each module's status (pending, running,
+  done, error, skipped), refreshed from the pipeline's progress callback. Afterwards a summary
+  panel shows: verdict (green/yellow/red), score, confidence, overrides; the top 5 findings with
+  severity, points and title; IOC counts by verdict; MITRE techniques; analyzer errors; and
+  services that are not configured. Only finding titles are printed, never descriptions or
+  evidence: titles contain no indicator values, while some older descriptions still hold
+  undefanged domains (see the P5.1 note).
+- Formats now: `json` (`<case_id>.json`, the full `AnalysisReport`), `csv`
+  (`<case_id>.iocs.csv`) and `stix` (`<case_id>.stix.json`, STIX 2.1 bundle) using the P9.2
+  exporters. `html`/`pdf` are accepted but reported as not available until Phase 11. Unknown
+  formats, missing files and oversize inputs exit with code 1 before any analysis.
+- `phishlens check-config` lists every service as enabled / not configured, plus components
+  (libmagic, zbar, ATT&CK data, tone classifiers), upload opt-ins, trusted authserv IDs and the
+  scorer. Key values are never printed (tested with a key set).
+- Real run: `phishlens analyze tests/fixtures/spoof_unaligned.eml` with live network printed
+  MALICIOUS 100/100 (real DNS: SPF fail for zetatech.xyz, microsoft.com DMARC p=reject; top
+  reasons "Impersonates Microsoft", "DMARC fail", "SPF fail") and wrote JSON, CSV and STIX.
