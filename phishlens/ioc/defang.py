@@ -11,7 +11,7 @@ Defanging is idempotent: already defanged values come back unchanged.
 
 from __future__ import annotations
 
-__all__ = ["defang_domain", "defang_email", "defang_ip", "defang_url"]
+__all__ = ["defang_domain", "defang_email", "defang_ip", "defang_url", "refang"]
 
 # Schemes whose colon is broken as "[:]" so the URI cannot be clicked or pasted into a browser.
 _INERT_SCHEMES = frozenset({"javascript", "vbscript", "data"})
@@ -53,3 +53,19 @@ def defang_url(url: str) -> str:
         return f"{prefix}:{defang_email(body)}"
     head, slash, tail = url.partition("/")  # a bare host or host/path
     return defang_domain(head) + slash + tail
+
+
+_REFANG_SCHEMES = {"hxxp": "http", "hxxps": "https", "fxp": "ftp", "fxps": "ftps"}
+
+
+def refang(value: str) -> str:
+    """Undo ``defang_*``: ``[.]`` -> ``.``, ``[@]`` -> ``@``, ``[:]`` -> ``:``, hxxp -> http.
+
+    For internal use only (turning our own defanged fields back into values); never show the
+    result to users.
+    """
+    value = value.replace("[.]", ".").replace("[@]", "@").replace("[:]", ":")
+    scheme, sep, rest = value.partition("://")
+    if sep and scheme.lower() in _REFANG_SCHEMES:
+        return f"{_REFANG_SCHEMES[scheme.lower()]}://{rest}"
+    return value

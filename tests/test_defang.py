@@ -34,3 +34,14 @@ def test_defang_domain_ip_email() -> None:
     assert defang_email("a.b@mail.evil.test") == "a.b[@]mail[.]evil[.]test"
     assert defang_email(defang_email("a@b.test")) == "a[@]b[.]test"
     assert defang_email("no-at-sign.test") == "no-at-sign[.]test"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["http://evil.test/login", "https://a.b.test:8443/x?q=1", "a.b@mail.evil.test", "1.2.3.4"],
+)
+def test_refang_round_trip(value: str) -> None:
+    from phishlens.ioc.defang import refang
+
+    defanged = defang_email(value) if "@" in value and "://" not in value else defang_url(value)
+    assert refang(defanged) == value

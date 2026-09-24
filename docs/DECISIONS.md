@@ -1079,3 +1079,44 @@ Plan reviewed and approved before building.
   saved, and the saved model loaded through `TONE_MODEL_PATH` in the tone analyzer. That tiny
   random model cannot learn, so its scores are meaningless; the real default is
   `distilbert-base-uncased` on a real dataset (`scripts/prepare_datasets.md`).
+
+## P9.1: IOC extraction
+
+- `phishlens/ioc/extract.py`: `extract_iocs(email | None, results) -> list[IOC]` (`None` for
+  file cases). It reads only structured data from the analyzers (`raw` rows,
+  `extracted_urls`, finding evidence for verdicts), so it depends on their field names rather
+  than re-parsing anything.
+- Sources and contexts: sender addresses and their domains (per role); Received hop IPs that
+  are not private/reserved and not `TRUSTED_INTERNAL_HOSTS` (the originating one is labelled);
+  email URLs, URL analyzer rows (and urlscan's final URL), every analyzer's `extracted_urls`
+  (QR codes labelled), and each URL's host as a domain or IP; tracking-pixel domains; attachment
+  names (the `safe_name` with bidirectional characters made visible) and hashes, including files
+  unpacked from archives but not inline images; sandbox network domains, IPs and URLs, and
+  dropped hashes. Our own defanged raw fields are turned back into values with `refang` (new in
+  `ioc/defang.py`).
+- Safety net: iocextract (refang on) runs only on genuine free text (text body, the HTML's text,
+  model rationales) and only for URLs and IPv4. Its email extraction proved unreliable, and
+  running it over our own evidence would harvest the legitimate brand domains we list there for
+  comparison.
+- Deduplication by `(type, value)` after normalization: domains, emails and hashes lowercased;
+  URLs canonicalized (lowercase scheme and host, empty path -> "/", IPv6 brackets kept; path and
+  query untouched). `source_module` and `context` are the merged, ordered, unique lists joined
+  with ", " and "; " (the `IOC` model keeps them as strings). The verdict is the worst found:
+  malicious > suspicious > clean > unknown (error/not_configured count as unknown).
+- Verdicts:
+  - URLs: the URL analyzer's `reputation_verdict`, else suspicious for strong static flags
+    (link text mismatch, @ trick, brand lookalike, data/javascript URI, redirect to another
+    domain, login page on an unrelated domain).
+  - A URL's host inherits at most "suspicious" from a bad URL, since other pages on the same
+    site may be fine.
+  - Files and hashes: hash reputation, worsened by a finished sandbox verdict, else suspicious
+    for strong static findings (type mismatch, double extension, RTLO, smuggling, macros,
+    remote template, PDF launch/JS, LNK command, YARA, sandbox suspicious).
+  - Sandbox network IOCs and dropped hashes: malicious when the detonation was malicious, else
+    suspicious.
+  - Sender addresses and domains: suspicious when a lookalike, brand-impersonation or young-
+    domain finding names them. The Return-Path domain is suspicious when authentication passed
+    only unaligned (spoofing).
+  - IPs: unknown (no IP reputation lookup in the pipeline yet).
+- Every IOC has a defanged form (`hxxp`, `[.]`, `[@]`); hashes and file names are unchanged.
+  Output is sorted by type (URL, domain, IP, email, SHA-256, SHA-1, MD5, file name), then value.
