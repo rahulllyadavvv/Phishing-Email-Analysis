@@ -20,6 +20,7 @@ generated reports.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from collections import Counter
@@ -28,12 +29,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
 from api import db, worker
+from api.security import API_KEY_HEADER, auth_enabled, require_api_key, upload_limit
 from phishlens import __version__
 from phishlens.config import get_settings
 from phishlens.ingest.loader import OLE_SIGNATURE, LoaderError, load_input, looks_like_rfc822
@@ -59,11 +62,13 @@ class RawSource(BaseModel):
 
 class CaseCreated(BaseModel):
     case_id: str
+    duplicate: bool = False  # an identical input was already analyzed: this is that case
 
 
 class FileCaseCreated(BaseModel):
     case_id: str
     filename: str
+    duplicate: bool = False
 
 
 # --- Helpers ---------------------------------------------------------------------------------
@@ -93,8 +98,16 @@ def _safe_name(filename: str | None) -> str:
 
 def _start(
     background: BackgroundTasks, data: bytes, filename: str | None, mode: worker.Mode,
-    case_type: str,
-) -> str:
+    case_type: str, force: bool = False,
+) -> tuple[str, bool]:
+    """Start a case, or return an existing finished case for the same input (unless
+    ``force``). Returns (case_id, duplicate)."""
+    if not force:
+        sha256 = hashlib.sha256(data).hexdigest()
+        with db.session_scope() as session:
+            existing = db.find_completed_by_sha256(session, sha256, case_type)
+            if existing is not None:
+                return existing.id, True
     with db.session_scope() as session:
         case = db.create_case(
             session, input_sha256="0" * 64, original_filename=filename, case_type=case_type
@@ -109,7 +122,7 @@ def _start(
         background.add_task(queue.enqueue_analysis, case_id, str(path), filename, mode)
     else:
         queue.enqueue_analysis(case_id, str(path), filename, mode)
-    return case_id
+    return case_id, False
 
 
 def _case_or_404(case_id: str) -> db.Case:
@@ -162,11 +175,19 @@ def create_app() -> FastAPI:
         version=__version__,
         description="Automated phishing email analysis. All indicators are defanged.",
         lifespan=_lifespan,
+        dependencies=[Depends(require_api_key)],
     )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=get_settings().cors_origins,
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=[API_KEY_HEADER, "Content-Type"],
+    )
+    uploads = [Depends(upload_limit)]
 
-    @app.post("/api/analyze", response_model=CaseCreated, status_code=202)
+    @app.post("/api/analyze", response_model=CaseCreated, status_code=202, dependencies=uploads)
     async def analyze(
-        background: BackgroundTasks, file: Annotated[UploadFile, File()]
+        background: BackgroundTasks, file: Annotated[UploadFile, File()], force: bool = False
     ) -> CaseCreated:
         data = await _read_upload(file)
         filename = _safe_name(file.filename)
@@ -180,24 +201,35 @@ def create_app() -> FastAPI:
                 f"{filename} is not an email (.eml or Outlook .msg); "
                 "use /api/analyze-file for other files",
             )
-        return CaseCreated(case_id=_start(background, data, filename, "auto", "email"))
+        case_id, duplicate = _start(background, data, filename, "auto", "email", force)
+        return CaseCreated(case_id=case_id, duplicate=duplicate)
 
-    @app.post("/api/analyze-file", response_model=list[FileCaseCreated], status_code=202)
+    @app.post(
+        "/api/analyze-file",
+        response_model=list[FileCaseCreated],
+        status_code=202,
+        dependencies=uploads,
+    )
     async def analyze_files(
-        background: BackgroundTasks, files: Annotated[list[UploadFile], File()]
+        background: BackgroundTasks,
+        files: Annotated[list[UploadFile], File()],
+        force: bool = False,
     ) -> list[FileCaseCreated]:
         if not files:
             raise HTTPException(400, "no files uploaded")
-        uploads = [(_safe_name(f.filename), await _read_upload(f)) for f in files]
-        return [
-            FileCaseCreated(
-                case_id=_start(background, data, name, "file", "file"), filename=name
-            )
-            for name, data in uploads
-        ]
+        received = [(_safe_name(f.filename), await _read_upload(f)) for f in files]
+        created = []
+        for name, data in received:
+            case_id, duplicate = _start(background, data, name, "file", "file", force)
+            created.append(FileCaseCreated(case_id=case_id, filename=name, duplicate=duplicate))
+        return created
 
-    @app.post("/api/analyze-raw", response_model=CaseCreated, status_code=202)
-    async def analyze_raw(background: BackgroundTasks, body: RawSource) -> CaseCreated:
+    @app.post(
+        "/api/analyze-raw", response_model=CaseCreated, status_code=202, dependencies=uploads
+    )
+    async def analyze_raw(
+        background: BackgroundTasks, body: RawSource, force: bool = False
+    ) -> CaseCreated:
         data = body.raw_source.encode("utf-8", errors="replace")
         limit = int(get_settings().max_input_size_mb * 1024 * 1024)
         if len(data) > limit:
@@ -206,7 +238,8 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 400, "this does not look like email source: paste the full message with headers"
             )
-        return CaseCreated(case_id=_start(background, data, "pasted.eml", "email", "email"))
+        case_id, duplicate = _start(background, data, "pasted.eml", "email", "email", force)
+        return CaseCreated(case_id=case_id, duplicate=duplicate)
 
     @app.get("/api/cases/{case_id}/status")
     def status(case_id: str) -> dict[str, Any]:
@@ -235,6 +268,9 @@ def create_app() -> FastAPI:
     ) -> FileResponse:
         case = _case_or_404(case_id)
         path = (case.report_files or {}).get(format)
+        reports_root = Path(get_settings().reports_dir).resolve()
+        if path and not Path(path).resolve().is_relative_to(reports_root):
+            path = None  # only generated reports can ever be downloaded
         if not path or not Path(path).is_file():
             available = ", ".join(sorted(case.report_files or {})) or "none"
             raise HTTPException(404, f"no {format} report for {case_id} (available: {available})")
@@ -321,6 +357,7 @@ def create_app() -> FastAPI:
             "status": "ok",
             "version": __version__,
             "queue": queue,
+            "auth": "api_key" if auth_enabled() else "disabled",
             "services": get_settings().configured_services(),
             "formats": list(FORMATS),
         }

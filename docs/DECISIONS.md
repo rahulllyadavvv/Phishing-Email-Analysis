@@ -1466,3 +1466,27 @@ Plan reviewed and approved before building.
 - Related fix: the attachment quarantine was keyed by the email's SHA-256, so an API delete could
   not find it. `attachments.analyze` now takes `case_id`, the pipeline passes it (nested emails
   use `<case_id>_nested<n>`), and CLI and API cases are quarantined under their own case ID.
+
+## P12.4: Security and deduplication
+
+- `api/security.py`. `require_api_key` is an app-wide dependency: every endpoint except
+  `/api/health` needs `X-API-Key` equal to `PHISHLENS_API_KEY` (constant-time comparison);
+  otherwise 401 with `WWW-Authenticate: X-API-Key`. With no key configured, authentication is
+  off (the existing "local use" mode from config). `/api/health` reports `auth: api_key|disabled`
+  so this is visible.
+- CORS: `CORS_ORIGINS` (default `http://localhost:8501`, the Streamlit UI), with methods
+  GET/POST/DELETE and headers X-API-Key/Content-Type. Other origins get no CORS headers.
+- Deduplication: before creating a case, the SHA-256 of the input is looked up among finished
+  (`done`) cases *of the same case type* (the same bytes analyzed as a file and as an email are
+  different analyses). A match returns that case with `duplicate: true`; `?force=true` on the
+  three upload endpoints re-analyzes. Failed cases are never reused. Pasted source counts as the
+  same input when its bytes match an upload.
+- Upload rate limit: `UPLOAD_RATE_LIMIT=count/seconds` (default 20/60; `0/...` turns it off),
+  a thread-safe sliding window per client IP in memory (per API process), on the three upload
+  endpoints only. Over the limit: 429 with `Retry-After`. Behind a reverse proxy the client IP
+  is the proxy unless uvicorn runs with `--proxy-headers`/`--forwarded-allow-ips` (to document
+  in P15).
+- File names: sanitized for display (P12.3); stored files always use generated names.
+- Quarantined inputs are never returned: downloads must resolve inside `REPORTS_DIR` (a tampered
+  `report_files` entry pointing at the quarantine gives 404), and no endpoint reads upload
+  contents back.

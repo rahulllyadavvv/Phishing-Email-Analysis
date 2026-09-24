@@ -140,13 +140,14 @@ def delete_case(session: Session, case_id: str) -> Case | None:
     return case
 
 
-def find_completed_by_sha256(session: Session, sha256: str) -> Case | None:
-    """The newest finished case for the same input, if any (for deduplication)."""
-    statement = (
-        select(Case)
-        .where(Case.input_sha256 == sha256, Case.status == "done")
-        .order_by(col(Case.created_at).desc())
-    )
+def find_completed_by_sha256(
+    session: Session, sha256: str, case_type: str | None = None
+) -> Case | None:
+    """The newest finished case for the same input (and case type), for deduplication."""
+    conditions = [Case.input_sha256 == sha256, Case.status == "done"]
+    if case_type:
+        conditions.append(Case.case_type == case_type)
+    statement = select(Case).where(*conditions).order_by(col(Case.created_at).desc())
     return session.exec(statement).first()
 
 

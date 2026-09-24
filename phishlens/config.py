@@ -82,6 +82,10 @@ class Settings(BaseSettings):
 
     # API authentication for the FastAPI backend (None disables auth checks for local use).
     phishlens_api_key: SecretStr | None = None
+    # Origins allowed to call the API from a browser (the UI), comma-separated.
+    cors_origins: CommaList = ["http://localhost:8501"]
+    # Uploads allowed per client IP, as "count/seconds" (0/60 turns the limit off).
+    upload_rate_limit: str = "20/60"
 
     # Largest accepted input (email or file), in megabytes.
     max_input_size_mb: float = Field(default=25.0, gt=0)
@@ -178,6 +182,23 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_origins(cls, value: object) -> object:
+        if isinstance(value, str):
+            return [o.strip().rstrip("/") for o in value.split(",") if o.strip()]
+        return value
+
+    @field_validator("upload_rate_limit")
+    @classmethod
+    def _check_upload_rate(cls, value: str) -> str:
+        count, sep, seconds = value.partition("/")
+        if not sep or not count.strip().isdigit() or not seconds.strip().isdigit():
+            raise ValueError("UPLOAD_RATE_LIMIT must look like 20/60")
+        if int(seconds) <= 0:
+            raise ValueError("UPLOAD_RATE_LIMIT seconds must be positive")
+        return value.strip()
 
     @field_validator("high_risk_extensions")
     @classmethod
