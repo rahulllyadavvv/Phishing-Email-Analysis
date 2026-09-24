@@ -279,3 +279,36 @@
 - Findings (severity, score from `weights.yaml` later): `spf_fail` high, `spf_softfail` medium,
   `spf_none` low, `spf_error` low (both temperror and permerror). `pass` and `neutral` give no
   finding.
+
+## P2.3: DKIM verification and signature quality
+
+- dkimpy needs a single DNS lookup per signature (the `<s>._domainkey.<d>` TXT key), so
+  `phishlens/enrichment/dkim_check.py` fetches the key with the async DNS helper first and hands
+  it to dkimpy through its `dnsfunc` argument. No thread and no dkimpy resolver are used (unlike
+  SPF, which needs many lookups in the middle of evaluation). The key is also checked with
+  `dkim.evaluate_pk` beforehand, so a broken key is told apart from a bad signature.
+- Each signature is verified separately (`verify_headerprep(idx)` + `verify_sig`) and gets a
+  status: `pass`; `fail` (body hash mismatch or signature mismatch); `permerror` (malformed tags,
+  no key record, bad or too-small key, under 1024 bits per RFC 8301); `temperror` (DNS timeout or
+  failure while fetching the key); `expired` (dkimpy refuses signatures whose `x=` is past).
+- Tags (`d`, `s`, `a`, `h`, `l`, `t`, `x`) are read with dkimpy's own `parse_tag_value`
+  independently of verification, so they are recorded even when verification fails.
+- `raw["dkim"]`: `signatures` (one dict per signature, header order, with `valid`) and
+  `delivery_time`. If DKIM-Signature headers exist but `raw_bytes` is empty (a `ParsedEmail` built
+  in code), DKIM is skipped with `skipped_reason: no_raw_message`.
+- One finding per ID, with the affected signatures listed in `evidence["signatures"]`, so the
+  scorer never counts the same problem twice for one email:
+  - `dkim_none` (low): no DKIM-Signature header.
+  - `dkim_invalid`: signatures with `fail` or `permerror`. Medium when no signature passes, low
+    when another signature on the message passes. `temperror` gives no finding: a DNS problem on
+    our side is not evidence against the sender.
+  - Quality findings are checked on valid signatures only, because an invalid signature
+    authenticates nothing anyway: `dkim_body_length_tag` (medium, `l=` present),
+    `dkim_unsigned_critical_headers` (medium, From/Subject/To missing from `h=`).
+  - `dkim_expired_or_old` (medium): an `expired` signature, or a valid one whose `t=` is more than
+    `DKIM_MAX_AGE_DAYS` (default 7) before delivery. Delivery time is the newest Received
+    timestamp, else `Date`, else now. Measuring at delivery rather than now means old archived
+    mail is not flagged as a replay. Caveat: dkimpy's `x=` check is against the current time, so
+    an archived message whose signature has since expired is reported as `expired`.
+- `cryptography` is added to the dev dependencies because the tests generate RSA keys with it
+  (it is already installed as a dependency of msoffcrypto-tool).

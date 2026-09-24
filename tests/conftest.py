@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 
+import dkim
 import dns.resolver
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from phishlens.config import get_settings
 from phishlens.enrichment import dns as dns_helper
@@ -45,3 +50,35 @@ def fake_dns(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[dict], FakeD
     yield install
     dns_helper.clear_cache()
     get_settings.cache_clear()
+
+
+@dataclass(frozen=True)
+class DkimKey:
+    """A throwaway RSA key pair for signing test messages."""
+
+    private_pem: bytes
+    dns_record: str
+
+    def sign(
+        self, message: bytes, domain: str = "signer.test", selector: str = "sel", **kw
+    ) -> bytes:
+        """Return ``message`` with a DKIM-Signature header prepended."""
+        kw.setdefault("include_headers", [b"from", b"to", b"subject", b"date"])
+        header = dkim.sign(message, selector.encode(), domain.encode(), self.private_pem, **kw)
+        return header + message
+
+
+@pytest.fixture(scope="session")
+def dkim_key() -> DkimKey:
+    """A 2048-bit RSA key generated once per test run, with its DKIM DNS record."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    )
+    public_der = key.public_key().public_bytes(
+        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+    )
+    record = f"v=DKIM1; k=rsa; p={base64.b64encode(public_der).decode()}"
+    return DkimKey(private_pem, record)

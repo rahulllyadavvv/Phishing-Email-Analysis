@@ -4,9 +4,13 @@ DNS is always faked: every test starts with an empty ``fake_dns`` table (all NXD
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from email.utils import format_datetime
 from pathlib import Path
 
+import dkim
 import dns.exception
 import pytest
 
@@ -104,7 +108,7 @@ async def test_unparseable_header_is_untrusted(monkeypatch: pytest.MonkeyPatch) 
 
 async def test_no_headers() -> None:
     result = await header.analyze(ParsedEmail())
-    assert result.findings == [] and result.errors == []
+    assert [f.id for f in result.findings] == ["dkim_none"] and result.errors == []
     assert result.raw["auth_results"] == []
 
 
@@ -208,3 +212,121 @@ async def test_spf_skipped_without_identity() -> None:
     result = await header.analyze(email)
     assert result.raw["spf"] == {"result": None, "ip": SPOOF_IP, "skipped_reason": "no_identity"}
     assert _spf(result) == []
+
+
+# --- DKIM ----------------------------------------------------------------------------------------
+
+DKIM_KEY_NAME = ("sel._domainkey.signer.test", "TXT")
+
+
+def _message(received_at: datetime | None = None) -> bytes:
+    received_at = received_at or datetime.now(UTC)
+    return (
+        b"Received: from mail.signer.test ([198.51.100.20]) by mx.recipient.test; "
+        + format_datetime(received_at).encode()
+        + b"\r\nFrom: Alice <alice@signer.test>\r\n"
+        b"To: bob@recipient.test\r\n"
+        b"Subject: Quarterly report\r\n"
+        b"Message-ID: <1@signer.test>\r\n"
+        b"\r\n"
+        b"Hello Bob,\r\nthe report is ready.\r\n"
+    )
+
+
+def _dkim(result) -> dict:
+    return {f.id: f for f in result.findings if f.id.startswith("dkim_")}
+
+
+@pytest.fixture
+def dkim_dns(fake_dns, dkim_key):
+    return fake_dns({DKIM_KEY_NAME: [dkim_key.dns_record]})
+
+
+async def test_dkim_valid_signature_has_no_findings(dkim_dns, dkim_key) -> None:
+    result = await header.analyze(parse_email(dkim_key.sign(_message())))
+    assert result.errors == []
+    assert _dkim(result) == {}
+    [sig] = result.raw["dkim"]["signatures"]
+    assert (sig["domain"], sig["status"], sig["valid"]) == ("signer.test", "pass", True)
+
+
+async def test_dkim_tampered_body_is_invalid(dkim_dns, dkim_key) -> None:
+    signed = dkim_key.sign(_message()).replace(b"report is ready", b"account is locked")
+    findings = _dkim(await header.analyze(parse_email(signed)))
+    assert list(findings) == ["dkim_invalid"]
+    finding = findings["dkim_invalid"]
+    assert finding.severity == Severity.MEDIUM
+    [sig] = finding.evidence["signatures"]
+    assert (sig["domain"], sig["status"]) == ("signer.test", "fail")
+
+
+async def test_dkim_invalid_is_low_when_another_signature_passes(dkim_dns, dkim_key) -> None:
+    signed = dkim_key.sign(dkim_key.sign(_message()), domain="nokey.test")
+    findings = _dkim(await header.analyze(parse_email(signed)))
+    assert findings["dkim_invalid"].severity == Severity.LOW
+    assert findings["dkim_invalid"].evidence["signatures"][0]["domain"] == "nokey.test"
+
+
+async def test_dkim_body_length_tag(dkim_dns, dkim_key) -> None:
+    signed = dkim_key.sign(_message(), length=True) + b"Click here: http://evil.test/\r\n"
+    findings = _dkim(await header.analyze(parse_email(signed)))
+    assert list(findings) == ["dkim_body_length_tag"]
+    assert findings["dkim_body_length_tag"].severity == Severity.MEDIUM
+    assert findings["dkim_body_length_tag"].evidence["signatures"][0]["body_length"] > 0
+
+
+async def test_dkim_unsigned_critical_headers(dkim_dns, dkim_key) -> None:
+    signed = dkim_key.sign(_message(), include_headers=[b"from", b"message-id"])
+    findings = _dkim(await header.analyze(parse_email(signed)))
+    [sig] = findings["dkim_unsigned_critical_headers"].evidence["signatures"]
+    assert sig["missing"] == ["subject", "to"]
+
+
+async def test_dkim_old_signature_is_flagged(
+    dkim_dns, dkim_key, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    signed_at = time.time() - 30 * 86400
+    with monkeypatch.context() as m:
+        m.setattr(dkim.time, "time", lambda: signed_at)
+        signed = dkim_key.sign(_message())
+    email = parse_email(signed)
+
+    findings = _dkim(await header.analyze(email))
+    [sig] = findings["dkim_expired_or_old"].evidence["signatures"]
+    assert sig["reason"] == "old"
+    assert 29.9 < sig["age_days"] < 30.1
+
+    monkeypatch.setenv("DKIM_MAX_AGE_DAYS", "60")
+    get_settings.cache_clear()
+    assert "dkim_expired_or_old" not in _dkim(await header.analyze(email))
+
+
+async def test_dkim_age_uses_delivery_time(dkim_dns, dkim_key) -> None:
+    """An old message analyzed today is not a replay: age is measured at delivery."""
+    delivered = datetime.now(UTC) - timedelta(days=365)
+    signed = dkim_key.sign(_message(received_at=delivered))
+    # Signed "now", delivered a year ago: negative age, so not old.
+    assert "dkim_expired_or_old" not in _dkim(await header.analyze(parse_email(signed)))
+
+
+async def test_dkim_expired_signature(fake_dns) -> None:
+    header_line = (
+        b"DKIM-Signature: v=1; a=rsa-sha256; d=signer.test; s=sel; h=from:to:subject;\r\n"
+        b" t=1000; x=2000; bh=AAAA; b=AAAA\r\n"
+    )
+    findings = _dkim(await header.analyze(parse_email(header_line + _message())))
+    assert list(findings) == ["dkim_expired_or_old"]
+    assert findings["dkim_expired_or_old"].evidence["signatures"][0]["reason"] == "expired"
+
+
+async def test_dkim_none_on_unsigned_fixture() -> None:
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert _dkim(result)["dkim_none"].severity == Severity.LOW
+    assert result.raw["dkim"]["signatures"] == []
+
+
+async def test_dkim_skipped_without_raw_bytes() -> None:
+    email = ParsedEmail(headers=[("DKIM-Signature", "v=1; d=signer.test")])
+    result = await header.analyze(email)
+    assert result.raw["dkim"]["skipped_reason"] == "no_raw_message"
+    assert _dkim(result) == {}

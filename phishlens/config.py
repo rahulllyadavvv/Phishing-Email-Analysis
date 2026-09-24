@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     dns_sqlite_cache: bool = True
     dns_cache_path: str = "phishlens_dns_cache.sqlite"
 
+    # DKIM: a valid signature older than this (at delivery time) may be a replayed message.
+    dkim_max_age_days: float = Field(default=7.0, gt=0)
+
     # Trust lists (comma-separated in the environment).
     trusted_authserv_ids: CommaList = []
     trusted_internal_hosts: CommaList = []

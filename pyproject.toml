@@ -54,6 +54,7 @@ dev = [
     "respx",
     "ruff",
     "segno",
+    "cryptography",
 ]
 
 [tool.setuptools.packages.find]

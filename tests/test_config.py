@@ -50,6 +50,7 @@ def test_defaults_without_env_file() -> None:
     assert settings.dns_cache_ttl_seconds == 3600
     assert settings.dns_sqlite_cache is True
     assert settings.dns_cache_path == "phishlens_dns_cache.sqlite"
+    assert settings.dkim_max_age_days == 7.0
     assert not any(settings.configured_services().values())
 
 
@@ -63,6 +64,14 @@ def test_dns_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.dns_cache_ttl_seconds == 0
     assert settings.dns_sqlite_cache is False
     assert settings.dns_cache_path == "cache/dns.sqlite"
+
+
+def test_dkim_max_age_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DKIM_MAX_AGE_DAYS", "1.5")
+    assert Settings().dkim_max_age_days == 1.5
+    monkeypatch.setenv("DKIM_MAX_AGE_DAYS", "0")
+    with pytest.raises(ValueError):
+        Settings()
 
 
 def test_get_settings_is_cached() -> None:
