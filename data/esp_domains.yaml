@@ -1,0 +1,37 @@
+# Email service providers (ESPs): domains they use for DKIM d= and Return-Path / bounce addresses.
+# A message whose only passing authentication is for one of these domains, unaligned with From,
+# was sent through that ESP on behalf of someone who did not authenticate as the From domain.
+# Matching is by domain or subdomain (e.g. "bounces.sendgrid.net" matches "sendgrid.net").
+esps:
+  - name: SendGrid
+    domains: [sendgrid.net, sendgrid.info]
+  - name: Mailchimp / Mandrill
+    domains: [mailchimpapp.net, mcsv.net, mcdlv.net, rsgsv.net, mandrillapp.com, mcsignup.com]
+  - name: Amazon SES
+    domains: [amazonses.com]
+  - name: Mailgun
+    domains: [mailgun.org, mailgun.net]
+  - name: SparkPost
+    domains: [sparkpostmail.com, sparkpostmail1.com]
+  - name: Postmark
+    domains: [mtasv.net, postmarkapp.com]
+  - name: Brevo (Sendinblue)
+    domains: [sendinblue.com, brevo.com, sender-sib.com]
+  - name: Constant Contact
+    domains: [constantcontact.com, ccsend.com, ctctcdn.com]
+  - name: HubSpot
+    domains: [hubspotemail.net, hubspotstarter.net, hs-email.net]
+  - name: Salesforce Marketing Cloud
+    domains: [exacttarget.com, exct.net, sfmc-mail.com]
+  - name: Klaviyo
+    domains: [klaviyomail.com, klaviyodelivery.com]
+  - name: Zoho Campaigns
+    domains: [zcsend.net, zohocampaigns.com]
+  - name: Campaign Monitor
+    domains: [cmail19.com, cmail20.com, createsend.com]
+  - name: Mailjet
+    domains: [mailjet.com, mjsv.net]
+  - name: Elastic Email
+    domains: [elasticemail.com]
+  - name: SendPulse
+    domains: [sendpulse.com]

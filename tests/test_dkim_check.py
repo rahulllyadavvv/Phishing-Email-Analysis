@@ -7,7 +7,7 @@ import dns.exception
 import pytest
 
 from phishlens.enrichment import dkim_check
-from phishlens.enrichment.dkim_check import verify_dkim
+from phishlens.enrichment.dkim_check import verify_arc, verify_dkim
 
 KEY_NAME = ("sel._domainkey.signer.test", "TXT")
 
@@ -118,3 +118,51 @@ def test_pick_key_prefers_record_with_p_tag() -> None:
         "v=DKIM1; p=abc"
     )
     assert dkim_check._pick_key([]) is None
+
+
+# --- ARC -----------------------------------------------------------------------------------------
+
+ARC_KEY_NAME = ("arc._domainkey.fwd.test", "TXT")
+FORWARDER_AR = (
+    b"Authentication-Results: lists.fwd.test; spf=pass smtp.mailfrom=signer.test;\r\n"
+    b" dkim=pass header.d=signer.test; dmarc=pass header.from=signer.test\r\n"
+)
+
+
+def _arc_sealed(dkim_key) -> bytes:
+    return dkim_key.arc_sign(FORWARDER_AR + MESSAGE, "fwd.test", "lists.fwd.test")
+
+
+async def test_arc_chain_passes(fake_dns, dkim_key) -> None:
+    fake = fake_dns({ARC_KEY_NAME: [dkim_key.dns_record]})
+    arc = await verify_arc(_arc_sealed(dkim_key))
+    assert arc.chain == "pass" and arc.reason == "success"
+    assert arc.sealer == "fwd.test"
+    [instance] = arc.instances
+    assert instance["instance"] == 1
+    assert instance["ams_valid"] and instance["as_valid"] and instance["cv"] == "none"
+    assert "dmarc=pass" in instance["aar"]
+    assert arc.key_errors == []
+    assert fake.calls == [ARC_KEY_NAME]
+    assert arc.to_dict()["chain"] == "pass"
+
+
+async def test_arc_modified_after_sealing_fails(fake_dns, dkim_key) -> None:
+    fake_dns({ARC_KEY_NAME: [dkim_key.dns_record]})
+    arc = await verify_arc(_arc_sealed(dkim_key).replace(b"report is ready", b"pay now"))
+    assert arc.chain == "fail"
+    assert "did not validate" in arc.reason
+
+
+async def test_arc_missing_key_fails_with_key_error(fake_dns, dkim_key) -> None:
+    fake_dns({})
+    arc = await verify_arc(_arc_sealed(dkim_key))
+    assert arc.chain == "fail"
+    assert arc.key_errors == ["arc._domainkey.fwd.test: nxdomain"]
+
+
+async def test_no_arc_headers(fake_dns) -> None:
+    fake = fake_dns({})
+    arc = await verify_arc(MESSAGE)
+    assert (arc.chain, arc.sealer, arc.instances) == ("none", None, [])
+    assert fake.calls == []

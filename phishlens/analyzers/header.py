@@ -1,6 +1,6 @@
 """Header analyzer: email authentication results and header anomalies.
 
-So far this covers ``Authentication-Results`` headers. Each one is parsed with ``authres`` and
+Authentication-Results: each one is parsed with ``authres`` and
 kept only when its authserv-id is listed in ``TRUSTED_AUTHSERV_IDS``, because any sender can add
 an ``Authentication-Results`` header of their own. An untrusted header gets a
 ``forged_auth_results_header`` finding. When the trust list is empty the forgery check is skipped
@@ -22,6 +22,12 @@ record (``phishlens.enrichment.dmarc_check``), not taken from Authentication-Res
 signal is ``auth_but_unaligned``: SPF or DKIM passed, but for a domain other than the one in
 From. ``raw["dmarc"]`` holds the policy and alignment, ``raw["auth_summary"]`` one row per
 mechanism.
+
+Finally: ESP detection (the only passing domain belongs to a bulk email provider, from
+``data/esp_domains.yaml``), ARC (a valid chain sealed by a ``TRUSTED_ARC_SEALERS`` domain softens
+failures caused by forwarding), findings from parser warnings (multiple From headers, an address
+in the display name, Received chain anomalies), and ``raw["header_verdict"]``, a one-line
+summary: ok, spoofing, fail, fail_policy_none, likely_forward or unknown.
 """
 
 from __future__ import annotations
@@ -35,7 +41,8 @@ from typing import Any
 import authres
 
 from phishlens.config import get_settings
-from phishlens.enrichment.dkim_check import DkimSignature, verify_dkim
+from phishlens.data_loader import esp_for_domain
+from phishlens.enrichment.dkim_check import ArcResult, DkimSignature, verify_arc, verify_dkim
 from phishlens.enrichment.dmarc_check import fetch_dmarc
 from phishlens.enrichment.spf_check import check_spf
 from phishlens.models import (
@@ -64,6 +71,49 @@ _SPF_FINDINGS: dict[str, tuple[str, Severity, str]] = {
 
 # A valid DKIM signature should cover these headers; otherwise they can be changed freely.
 CRITICAL_SIGNED_HEADERS = ("from", "subject", "to")
+
+# Failures a forwarder typically causes. A valid ARC chain from a trusted sealer downgrades them.
+FORWARDING_FAILURE_IDS = ("spf_fail", "spf_softfail", "dkim_invalid", "dmarc_fail")
+# Downgraded as well when the trusted sealer recorded dmarc=pass for the original message.
+ALIGNMENT_FAILURE_IDS = (
+    "spf_pass_unaligned",
+    "dkim_pass_unaligned",
+    "auth_but_unaligned",
+    "esp_unaligned",
+)
+_AAR_DMARC_RE = re.compile(r"\bdmarc\s*=\s*([a-z]+)", re.IGNORECASE)
+
+# Parser warning code -> (finding id, severity, title).
+_WARNING_FINDINGS: dict[str, tuple[str, Severity, str]] = {
+    "multiple_from_headers": (
+        "multiple_from_headers",
+        Severity.HIGH,
+        "More than one From header",
+    ),
+    "display_name_contains_email": (
+        "display_name_contains_address",
+        Severity.MEDIUM,
+        "Display name contains a different email address",
+    ),
+    "received_out_of_order": (
+        "received_chain_anomaly",
+        Severity.LOW,
+        "Received chain anomaly",
+    ),
+    "received_parse_error": (
+        "received_chain_anomaly",
+        Severity.LOW,
+        "Received chain anomaly",
+    ),
+}
+_WARNING_DESCRIPTIONS = {
+    "multiple_from_headers": "The message has several From headers. Clients and filters may "
+    "each pick a different one, which is a known way to slip past DMARC.",
+    "display_name_contains_address": "A display name shows an email address different from the "
+    "real one, so the recipient sees a trusted address that is not the sender.",
+    "received_chain_anomaly": "The Received headers are out of order or unparsable, which can "
+    "mean some of them were forged.",
+}
 
 
 def _parse_auth_results(value: str) -> dict[str, Any]:
@@ -453,6 +503,134 @@ async def _check_dmarc(email: ParsedEmail, result: AnalyzerResult) -> None:
         )
 
 
+def _check_esp(result: AnalyzerResult) -> None:
+    dmarc = result.raw.get("dmarc") or {}
+    if dmarc.get("result") is None or dmarc.get("dmarc_pass"):
+        return
+    spf = result.raw.get("spf") or {}
+    passing = [spf.get("domain")] if spf.get("result") == "pass" else []
+    passing += [
+        s["domain"] for s in (result.raw.get("dkim") or {}).get("signatures", []) if s["valid"]
+    ]
+    if not passing:
+        return
+    esps = [esp_for_domain(d) for d in passing]
+    if not all(esps):
+        return
+    names = sorted({e.name for e in esps if e})
+    result.findings.append(
+        _finding(
+            "esp_unaligned",
+            Severity.MEDIUM,
+            f"Only authenticated by an email service provider ({', '.join(names)})",
+            f"The message passed SPF/DKIM only for {', '.join(names)} domains, not for the From "
+            f"domain '{dmarc.get('domain')}'. Bulk email services are often abused this way.",
+            {"esps": names, "domains": passing, "from_domain": dmarc.get("domain")},
+        )
+    )
+
+
+def _is_trusted_sealer(domain: str | None) -> bool:
+    domain = (domain or "").lower()
+    return bool(domain) and any(
+        domain == t or domain.endswith("." + t) for t in get_settings().trusted_arc_sealers
+    )
+
+
+async def _check_arc(email: ParsedEmail, result: AnalyzerResult) -> None:
+    has_arc = any(name.lower().startswith("arc-") for name, _ in email.headers)
+    if has_arc and not email.raw_bytes:
+        result.raw["arc"] = {"chain": None, "trusted": False, "skipped_reason": "no_raw_message"}
+        return
+    arc = await verify_arc(email.raw_bytes) if has_arc else ArcResult()
+    trusted = arc.chain == "pass" and _is_trusted_sealer(arc.sealer)
+    original_dmarc = None
+    if arc.instances and (m := _AAR_DMARC_RE.search(arc.instances[0]["aar"])):
+        original_dmarc = m.group(1).lower()
+    result.raw["arc"] = {**arc.to_dict(), "trusted": trusted, "original_dmarc": original_dmarc}
+    if not trusted:
+        return
+
+    ids = FORWARDING_FAILURE_IDS + (ALIGNMENT_FAILURE_IDS if original_dmarc == "pass" else ())
+    downgraded = []
+    for finding in result.findings:
+        if finding.id in ids:
+            finding.severity = Severity.LOW
+            finding.evidence = {**finding.evidence, "downgraded_by": "arc_trusted_forward"}
+            downgraded.append(finding.id)
+    if downgraded:
+        result.findings.append(
+            _finding(
+                "arc_trusted_forward",
+                Severity.INFO,
+                f"Forwarded through a trusted intermediary ({arc.sealer})",
+                f"Authentication failed, but a valid ARC chain sealed by the trusted "
+                f"'{arc.sealer}' shows the message was forwarded, which explains the failure. "
+                "Related findings were downgraded to low.",
+                {"sealer": arc.sealer, "original_dmarc": original_dmarc, "downgraded": downgraded},
+            )
+        )
+
+
+def _check_parser_warnings(email: ParsedEmail, result: AnalyzerResult) -> None:
+    grouped: dict[str, tuple[Severity, str, list[str]]] = {}
+    for warning in email.parse_warnings:
+        code = warning.split(":", 1)[0].strip()
+        if code not in _WARNING_FINDINGS:
+            continue
+        finding_id, severity, title = _WARNING_FINDINGS[code]
+        grouped.setdefault(finding_id, (severity, title, []))[2].append(warning)
+    for finding_id, (severity, title, warnings) in grouped.items():
+        result.findings.append(
+            _finding(
+                finding_id,
+                severity,
+                title,
+                _WARNING_DESCRIPTIONS[finding_id],
+                {"warnings": warnings},
+            )
+        )
+
+
+def _header_verdict(result: AnalyzerResult) -> dict[str, str]:
+    """Combine SPF/DKIM/DMARC/ARC into one verdict (see the module docstring)."""
+    dmarc = result.raw.get("dmarc") or {}
+    arc = result.raw.get("arc") or {}
+    if dmarc.get("result") is None:
+        return {"verdict": "unknown", "risk": "unknown", "reason": "DMARC not evaluated"}
+    if dmarc["dmarc_pass"]:
+        return {"verdict": "ok", "risk": "low", "reason": "aligned SPF or DKIM pass"}
+    if arc.get("trusted") and (
+        not dmarc["auth_but_unaligned"] or arc.get("original_dmarc") == "pass"
+    ):
+        return {
+            "verdict": "likely_forward",
+            "risk": "low",
+            "reason": f"authentication failed but a trusted ARC chain from {arc.get('sealer')} "
+            "explains it",
+        }
+    if dmarc["auth_but_unaligned"]:
+        return {
+            "verdict": "spoofing",
+            "risk": "critical",
+            "reason": "SPF/DKIM passed only for domains other than the From domain",
+        }
+    if dmarc["result"] == "temperror":
+        return {"verdict": "unknown", "risk": "unknown", "reason": "DMARC record lookup failed"}
+    if dmarc["result"] == "none" or dmarc.get("policy") == "none":
+        return {
+            "verdict": "fail_policy_none",
+            "risk": "critical",
+            "reason": "authentication failed and the From domain does not enforce DMARC, "
+            "so nothing stopped delivery",
+        }
+    return {
+        "verdict": "fail",
+        "risk": "high",
+        "reason": f"authentication failed (DMARC policy {dmarc.get('policy')})",
+    }
+
+
 async def analyze(email: ParsedEmail) -> AnalyzerResult:
     """Analyze the email's headers. Never raises; errors go into ``AnalyzerResult.errors``."""
     start = time.perf_counter()
@@ -473,5 +651,21 @@ async def analyze(email: ParsedEmail) -> AnalyzerResult:
         await _check_dmarc(email, result)
     except Exception as exc:
         result.errors.append(f"dmarc: {type(exc).__name__}: {exc}")
+    try:
+        _check_esp(result)
+    except Exception as exc:
+        result.errors.append(f"esp: {type(exc).__name__}: {exc}")
+    try:
+        await _check_arc(email, result)
+    except Exception as exc:
+        result.errors.append(f"arc: {type(exc).__name__}: {exc}")
+    try:
+        _check_parser_warnings(email, result)
+    except Exception as exc:
+        result.errors.append(f"parser_warnings: {type(exc).__name__}: {exc}")
+    try:
+        result.raw["header_verdict"] = _header_verdict(result)
+    except Exception as exc:
+        result.errors.append(f"header_verdict: {type(exc).__name__}: {exc}")
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result

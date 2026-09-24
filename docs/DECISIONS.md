@@ -345,3 +345,47 @@
   `dmarc_policy_none` describe the From domain's setup rather than the message, so both stay
   low. The final weighting comes from `weights.yaml` in P10.1. On `temperror` no DMARC policy
   finding is raised, but the alignment findings still are, because they need no record.
+
+## P2.5: ARC, ESPs and header anomalies
+
+- `phishlens/data_loader.py` is created here, earlier than P3.1, because `data/esp_domains.yaml`
+  is needed now. Each file is read once (`functools.cache`) and validated with pydantic (frozen
+  models, `extra="forbid"`), so a broken data file fails loudly. `clear_cache()` resets it. P3.1
+  adds its files to the same module.
+- `esp_domains.yaml`: `esps: [{name, domains}]`. A domain matches an ESP when it equals one of
+  its domains or is a subdomain of one. `esp_unaligned` (medium) fires when DMARC does not pass
+  and every passing SPF/DKIM domain belongs to an ESP. It names the ESPs. It comes on top of
+  `auth_but_unaligned`, adding context: phishers often send through bulk email services.
+- ARC (`verify_arc` in `dkim_check.py`): as with DKIM, the keys named by every ARC-Seal and
+  ARC-Message-Signature are fetched first through the DNS helper and served to dkimpy's
+  `ARC.verify` from a dict. A key that cannot be fetched goes into `key_errors`, and that
+  signature fails. `chain` is `pass`, `fail` (including dkimpy's `None`, meaning an earlier
+  sealer reported a failure) or `none`. `sealer` is the ARC-Seal `d=` of the newest instance, the
+  last intermediary before us.
+- Trusted: `chain == pass` and the sealer equals, or is a subdomain of, a `TRUSTED_ARC_SEALERS`
+  entry. When trusted, the findings a forwarder typically causes (`spf_fail`, `spf_softfail`,
+  `dkim_invalid`, `dmarc_fail`) are set to low, with `evidence["downgraded_by"]`.
+- Beyond the plan: forwarders usually rewrite the envelope sender, so SPF passes unaligned and
+  legitimate forwarded mail would otherwise show `auth_but_unaligned` as critical. So when the
+  trusted sealer's own ARC-Authentication-Results (newest instance) recorded `dmarc=pass` for
+  the original message, `spf_pass_unaligned`, `dkim_pass_unaligned`, `auth_but_unaligned` and
+  `esp_unaligned` are downgraded too. That is the use ARC is designed for (RFC 8617). Without
+  that recorded pass they stay as they are. `arc_trusted_forward` (info) is added only when
+  something was actually downgraded.
+- ARC is skipped without `raw_bytes` (`skipped_reason: no_raw_message`), like DKIM.
+- Parser warnings -> findings (one per ID, with the warnings in `evidence["warnings"]`):
+  `multiple_from_headers` -> `multiple_from_headers` (high); `display_name_contains_email` ->
+  `display_name_contains_address` (medium); `received_out_of_order` and `received_parse_error` ->
+  `received_chain_anomaly` (low). `received_no_ip` is not mapped, because internal hops often
+  have no IP. `multiple_from_addresses` is not mapped either, since it is not in the plan. We can
+  add it later.
+- `raw["header_verdict"] = {verdict, risk, reason}`, checked in this order:
+  1. DMARC not evaluated (no From) -> `unknown`.
+  2. `dmarc_pass` -> `ok` / low.
+  3. Trusted ARC, and either not `auth_but_unaligned` or original `dmarc=pass` ->
+     `likely_forward` / low.
+  4. `auth_but_unaligned` -> `spoofing` / critical.
+  5. DMARC `temperror` -> `unknown`.
+  6. No DMARC record, or effective policy `none` -> `fail_policy_none` / critical (nothing
+     stopped delivery; "higher if p=none let it through").
+  7. Otherwise `fail` / high.

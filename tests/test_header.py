@@ -28,6 +28,8 @@ def settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_dns) -> I
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TRUSTED_AUTHSERV_IDS", raising=False)
     monkeypatch.delenv("TRUSTED_INTERNAL_HOSTS", raising=False)
+    monkeypatch.delenv("TRUSTED_ARC_SEALERS", raising=False)
+    monkeypatch.delenv("DKIM_MAX_AGE_DAYS", raising=False)
     get_settings.cache_clear()
     fake_dns({})
     yield
@@ -479,3 +481,212 @@ async def test_dmarc_skipped_without_from() -> None:
     result = await header.analyze(ParsedEmail())
     assert result.raw["dmarc"] == {"result": None, "skipped_reason": "no_from_domain"}
     assert "auth_summary" not in result.raw
+
+
+# --- ESP, ARC, parser warnings and header verdict -------------------------------------------------
+
+
+def _ids(result) -> dict:
+    return {f.id: f for f in result.findings}
+
+
+def _verdict(result) -> str:
+    return result.raw["header_verdict"]["verdict"]
+
+
+async def test_esp_unaligned_names_the_esp(fake_dns) -> None:
+    fake_dns(
+        {
+            ("sendgrid.net", "TXT"): ["v=spf1 ip4:198.51.100.0/24 -all"],
+            ("_dmarc.signer.test", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    result = await header.analyze(parse_email(_message(return_path="bounces@sendgrid.net")))
+    finding = _ids(result)["esp_unaligned"]
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["esps"] == ["SendGrid"]
+    assert finding.evidence["domains"] == ["sendgrid.net"]
+    assert _verdict(result) == "spoofing"
+
+
+async def test_no_esp_finding_for_non_esp_domain(fake_dns) -> None:
+    fake_dns({("zetatech.xyz", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"]})
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert "esp_unaligned" not in _ids(result)
+
+
+async def test_no_esp_finding_when_dmarc_passes(fake_dns, dkim_key) -> None:
+    fake_dns(
+        {
+            DKIM_KEY_NAME: [dkim_key.dns_record],
+            ("sendgrid.net", "TXT"): ["v=spf1 ip4:198.51.100.0/24 -all"],
+        }
+    )
+    signed = dkim_key.sign(_message(return_path="bounces@sendgrid.net"))
+    result = await header.analyze(parse_email(signed))
+    assert "esp_unaligned" not in _ids(result)
+    assert _verdict(result) == "ok"
+
+
+def _forwarded(dkim_key, aar_dmarc: str = "pass") -> bytes:
+    """signer.test signs, a list at fwd.test adds a footer (breaking DKIM), rewrites the envelope
+    sender to its own domain (SPF passes for fwd.test) and ARC-seals what it received."""
+    original = dkim_key.sign(_message(return_path="bounce@fwd.test"))
+    modified = original + b"-- \r\nSent via the fwd.test list\r\n"
+    ar = (
+        b"Authentication-Results: lists.fwd.test; dkim=pass header.d=signer.test;\r\n"
+        b" dmarc=" + aar_dmarc.encode() + b" header.from=signer.test\r\n"
+    )
+    return dkim_key.arc_sign(ar + modified, "fwd.test", "lists.fwd.test")
+
+
+@pytest.fixture
+def forward_dns(fake_dns, dkim_key):
+    return fake_dns(
+        {
+            DKIM_KEY_NAME: [dkim_key.dns_record],
+            ("arc._domainkey.fwd.test", "TXT"): [dkim_key.dns_record],
+            ("fwd.test", "TXT"): ["v=spf1 ip4:198.51.100.0/24 -all"],
+            ("_dmarc.signer.test", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+
+
+def _trust_sealers(monkeypatch: pytest.MonkeyPatch, sealers: str) -> None:
+    monkeypatch.setenv("TRUSTED_ARC_SEALERS", sealers)
+    get_settings.cache_clear()
+
+
+async def test_trusted_arc_forward_downgrades_findings(
+    forward_dns, dkim_key, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _trust_sealers(monkeypatch, "fwd.test")
+    result = await header.analyze(parse_email(_forwarded(dkim_key)))
+
+    assert result.errors == []
+    arc = result.raw["arc"]
+    assert (arc["chain"], arc["sealer"], arc["trusted"]) == ("pass", "fwd.test", True)
+    assert arc["original_dmarc"] == "pass"
+    findings = _ids(result)
+    for fid in ("dkim_invalid", "dmarc_fail", "spf_pass_unaligned", "auth_but_unaligned"):
+        assert findings[fid].severity == Severity.LOW, fid
+        assert findings[fid].evidence["downgraded_by"] == "arc_trusted_forward"
+    forward = findings["arc_trusted_forward"]
+    assert forward.severity == Severity.INFO
+    assert set(forward.evidence["downgraded"]) >= {"dkim_invalid", "auth_but_unaligned"}
+    assert _verdict(result) == "likely_forward"
+
+
+async def test_untrusted_arc_sealer_changes_nothing(forward_dns, dkim_key) -> None:
+    result = await header.analyze(parse_email(_forwarded(dkim_key)))
+    assert result.raw["arc"]["chain"] == "pass"
+    assert result.raw["arc"]["trusted"] is False
+    findings = _ids(result)
+    assert findings["auth_but_unaligned"].severity == Severity.CRITICAL
+    assert "arc_trusted_forward" not in findings
+    assert _verdict(result) == "spoofing"
+
+
+async def test_trusted_arc_without_original_dmarc_pass_keeps_spoofing(
+    forward_dns, dkim_key, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _trust_sealers(monkeypatch, "fwd.test")
+    result = await header.analyze(parse_email(_forwarded(dkim_key, aar_dmarc="fail")))
+    findings = _ids(result)
+    assert findings["dkim_invalid"].severity == Severity.LOW
+    assert findings["auth_but_unaligned"].severity == Severity.CRITICAL
+    assert _verdict(result) == "spoofing"
+
+
+async def test_broken_arc_chain_is_not_trusted(
+    forward_dns, dkim_key, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _trust_sealers(monkeypatch, "fwd.test")
+    tampered = _forwarded(dkim_key).replace(b"the report is ready", b"wire the money")
+    result = await header.analyze(parse_email(tampered))
+    assert result.raw["arc"]["chain"] == "fail"
+    assert result.raw["arc"]["trusted"] is False
+    assert "arc_trusted_forward" not in _ids(result)
+
+
+async def test_multiple_from_headers_finding() -> None:
+    finding = _ids(await header.analyze(_fixture("duplicate_from.eml")))["multiple_from_headers"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["warnings"] == ["multiple_from_headers: 2 From headers found"]
+
+
+async def test_display_name_contains_address_finding() -> None:
+    result = await header.analyze(_fixture("display_name_trick.eml"))
+    finding = _ids(result)["display_name_contains_address"]
+    assert finding.severity == Severity.MEDIUM
+    assert "ceo@company.com" in finding.evidence["warnings"][0]
+
+
+async def test_received_chain_anomaly_finding() -> None:
+    raw = (
+        b"Received: from b.test ([198.51.100.2]) by mx.test; Mon, 07 Sep 2026 08:00:00 +0000\r\n"
+        b"Received: from a.test ([198.51.100.1]) by b.test; Mon, 07 Sep 2026 09:00:00 +0000\r\n"
+        b"From: x@a.test\r\nSubject: hi\r\n\r\nbody\r\n"
+    )
+    finding = _ids(await header.analyze(parse_email(raw)))["received_chain_anomaly"]
+    assert finding.severity == Severity.LOW
+    assert finding.evidence["warnings"][0].startswith("received_out_of_order")
+
+
+async def test_verdict_fail_with_enforced_policy(fake_dns) -> None:
+    fake_dns(
+        {
+            ("signer.test", "TXT"): ["v=spf1 ip4:192.0.2.1 -all"],
+            ("_dmarc.signer.test", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    result = await header.analyze(parse_email(_message(return_path="bounce@signer.test")))
+    assert result.raw["header_verdict"] == {
+        "verdict": "fail",
+        "risk": "high",
+        "reason": "authentication failed (DMARC policy reject)",
+    }
+
+
+@pytest.mark.parametrize("record", [None, "v=DMARC1; p=none"])
+async def test_verdict_fail_policy_none(fake_dns, record: str | None) -> None:
+    answers = {("signer.test", "TXT"): ["v=spf1 ip4:192.0.2.1 -all"]}
+    if record:
+        answers[("_dmarc.signer.test", "TXT")] = [record]
+    fake_dns(answers)
+    result = await header.analyze(parse_email(_message(return_path="bounce@signer.test")))
+    assert _verdict(result) == "fail_policy_none"
+    assert result.raw["header_verdict"]["risk"] == "critical"
+
+
+async def test_verdict_spoofing_on_fixture_2(fake_dns) -> None:
+    fake_dns({("zetatech.xyz", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"]})
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert result.raw["header_verdict"]["verdict"] == "spoofing"
+    assert result.raw["header_verdict"]["risk"] == "critical"
+
+
+async def test_verdict_unknown(fake_dns) -> None:
+    assert _verdict(await header.analyze(ParsedEmail())) == "unknown"
+    fake_dns({("_dmarc.signer.test", "TXT"): dns.exception.Timeout()})
+    result = await header.analyze(parse_email(_message()))
+    assert result.raw["header_verdict"] == {
+        "verdict": "unknown",
+        "risk": "unknown",
+        "reason": "DMARC record lookup failed",
+    }
+
+
+@pytest.mark.parametrize("name", ALL_FIXTURES)
+async def test_every_fixture_gets_a_verdict_and_never_raises(name: str) -> None:
+    result = await header.analyze(_fixture(name))
+    assert result.errors == []
+    assert result.raw["header_verdict"]["verdict"] in {
+        "ok",
+        "spoofing",
+        "fail",
+        "fail_policy_none",
+        "likely_forward",
+        "unknown",
+    }
+    assert result.raw["arc"]["chain"] == "none"

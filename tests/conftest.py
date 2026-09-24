@@ -67,6 +67,15 @@ class DkimKey:
         header = dkim.sign(message, selector.encode(), domain.encode(), self.private_pem, **kw)
         return header + message
 
+    def arc_sign(self, message: bytes, domain: str, srv_id: str, selector: str = "arc") -> bytes:
+        """Return ``message`` with an ARC set prepended. ``message`` must already carry an
+        Authentication-Results header from ``srv_id`` (it becomes the ARC-Authentication-Results).
+        """
+        headers = dkim.arc_sign(
+            message, selector.encode(), domain.encode(), self.private_pem, srv_id.encode()
+        )
+        return b"".join(headers) + message
+
 
 @pytest.fixture(scope="session")
 def dkim_key() -> DkimKey:
