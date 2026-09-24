@@ -1608,3 +1608,21 @@ Plan reviewed and approved before building.
   hook, so file names and finding titles are escaped and defanged; only the chart images bypass it.
 - The fixture labels are in `tests/fixtures/eval_labels.csv` (from `labels.yaml`: `clean` is
   legit, everything else phishing; the expected verdict is the manual verdict).
+
+## P15.1: Docker
+
+- **One image, four services.** api, worker and ui run the same image with different commands;
+  redis is the official `redis:7-alpine`. The worker is `rq worker phishlens`.
+- **Editable install inside the image.** Data files are found relative to the repository
+  (`phishlens/data_loader.py`: `DATA_DIR`), and `ui/services.yaml` sits next to the UI, so the
+  source tree is copied to `/app` and installed with `pip install -e .`. Dependencies are
+  installed in an earlier layer from `pyproject.toml` alone, so code changes rebuild quickly.
+- **State outside the image.** DB, reports and caches live in the `data` volume
+  (`/var/lib/phishlens`), uploads and quarantined files in `quarantine`
+  (`/var/lib/phishlens-quarantine`), through the existing settings (`DATABASE_URL`,
+  `REPORTS_DIR`, `DNS_CACHE_PATH`, `ENRICHMENT_CACHE_PATH`, `QUARANTINE_DIR`) set as image
+  defaults. The data volume is not mounted over `/app/data` (the YAML tables).
+- **SQLite is shared by api and worker** through the `data` volume. That is fine for one host;
+  a multi-host setup would switch `DATABASE_URL` to a server database.
+- `.env` is `required: false` in compose, so `docker compose up` works without one (all API keys
+  are optional).

@@ -92,3 +92,20 @@ skipped: ..." and every other format is still written; `test_pdf_is_a_pdf` is sk
   quota. Reports go to `reports/evaluation/` (gitignored).
 - The 14 fixtures are far too few to tune thresholds on: `--tune` on them only shows that the
   machinery works. Tune on a real, labelled dataset (see `scripts/prepare_datasets.md`).
+
+## P15.1: Docker
+
+- `make up` (= `docker compose up -d --build`) starts redis, api, worker and ui. UI:
+  http://localhost:8501, API: http://localhost:8000. `.env` is optional; every service reads it.
+- The image installs libmagic, zbar, pango/cairo (WeasyPrint) and yara, so QR decoding, magic
+  detection and PDF reports work in the container even where they are skipped on the dev Mac.
+- The build downloads the MITRE ATT&CK data (~45 MB). Offline builds: `docker compose build
+  --build-arg FETCH_ATTACK_DATA=0` (mapping then uses the fallback table in the rules file).
+- Volumes: `data` (SQLite DB, reports, DNS and enrichment caches) for api and worker;
+  `quarantine` (uploads and quarantined attachments) for api and worker only. The ui container
+  mounts nothing and talks to the API over the compose network.
+- The containers run as the non-root user `phishlens` (uid 10001).
+- **Not yet verified locally:** while writing P15.1 the Docker Desktop engine on the dev Mac did
+  not respond (every `docker` client call hung), so the image was not built here.
+  `docker compose config` validates the compose file and `tests/test_deploy.py` checks the
+  setup statically; CI (P15.2) builds the image.
