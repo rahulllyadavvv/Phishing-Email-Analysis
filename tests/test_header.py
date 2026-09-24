@@ -137,8 +137,11 @@ async def test_every_fixture_analyzes_without_errors(
 SPOOF_IP = "203.0.113.45"
 
 
+SPF_RESULT_IDS = {"spf_fail", "spf_softfail", "spf_none", "spf_error"}
+
+
 def _spf(result) -> list:
-    return [f for f in result.findings if f.id.startswith("spf_")]
+    return [f for f in result.findings if f.id in SPF_RESULT_IDS]
 
 
 @pytest.mark.parametrize(
@@ -219,10 +222,14 @@ async def test_spf_skipped_without_identity() -> None:
 DKIM_KEY_NAME = ("sel._domainkey.signer.test", "TXT")
 
 
-def _message(received_at: datetime | None = None) -> bytes:
+def _message(
+    received_at: datetime | None = None, return_path: str | None = None
+) -> bytes:
     received_at = received_at or datetime.now(UTC)
+    rp = f"Return-Path: <{return_path}>\r\n".encode() if return_path else b""
     return (
-        b"Received: from mail.signer.test ([198.51.100.20]) by mx.recipient.test; "
+        rp
+        + b"Received: from mail.signer.test ([198.51.100.20]) by mx.recipient.test; "
         + format_datetime(received_at).encode()
         + b"\r\nFrom: Alice <alice@signer.test>\r\n"
         b"To: bob@recipient.test\r\n"
@@ -330,3 +337,145 @@ async def test_dkim_skipped_without_raw_bytes() -> None:
     result = await header.analyze(email)
     assert result.raw["dkim"]["skipped_reason"] == "no_raw_message"
     assert _dkim(result) == {}
+
+
+# --- DMARC and alignment -------------------------------------------------------------------------
+
+ALIGNMENT_IDS = {
+    "spf_pass_unaligned",
+    "dkim_pass_unaligned",
+    "auth_but_unaligned",
+    "dmarc_fail",
+    "dmarc_none_record",
+    "dmarc_policy_none",
+}
+
+
+def _dmarc(result) -> dict:
+    return {f.id: f for f in result.findings if f.id in ALIGNMENT_IDS}
+
+
+async def test_fixture_2_zetatech_spoofing_microsoft_is_critical(fake_dns) -> None:
+    fake_dns(
+        {
+            ("zetatech.xyz", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"],
+            ("_dmarc.microsoft.com", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+
+    assert result.errors == []
+    findings = _dmarc(result)
+    assert set(findings) == {"spf_pass_unaligned", "auth_but_unaligned", "dmarc_fail"}
+    assert findings["auth_but_unaligned"].severity == Severity.CRITICAL
+    assert findings["auth_but_unaligned"].evidence["spf_domain"] == "zetatech.xyz"
+    assert findings["spf_pass_unaligned"].severity == Severity.HIGH
+    assert findings["dmarc_fail"].evidence["policy"] == "reject"
+
+    dmarc = result.raw["dmarc"]
+    assert (dmarc["result"], dmarc["spf_aligned"], dmarc["auth_but_unaligned"]) == (
+        "fail",
+        False,
+        True,
+    )
+    assert result.raw["auth_summary"] == [
+        {"mechanism": "spf", "result": "pass", "domain": "zetatech.xyz", "aligned": False},
+        {"mechanism": "dkim", "result": "none", "domain": None, "aligned": False},
+        {"mechanism": "dmarc", "result": "fail", "domain": "microsoft.com", "aligned": False},
+    ]
+
+
+async def test_auth_but_unaligned_even_without_dmarc_record(fake_dns) -> None:
+    fake_dns({("zetatech.xyz", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"]})
+    findings = _dmarc(await header.analyze(_fixture("spoof_unaligned.eml")))
+    assert set(findings) == {"spf_pass_unaligned", "auth_but_unaligned", "dmarc_none_record"}
+
+
+async def test_fully_aligned_pass(fake_dns, dkim_key) -> None:
+    fake_dns(
+        {
+            DKIM_KEY_NAME: [dkim_key.dns_record],
+            ("signer.test", "TXT"): ["v=spf1 ip4:198.51.100.20 -all"],
+            ("_dmarc.signer.test", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    signed = dkim_key.sign(_message(return_path="bounce@signer.test"))
+    result = await header.analyze(parse_email(signed))
+
+    assert _dmarc(result) == {}
+    dmarc = result.raw["dmarc"]
+    assert dmarc["result"] == "pass"
+    assert dmarc["spf_aligned"] and dmarc["dkim_aligned"] and dmarc["dmarc_pass"]
+    assert all(row["aligned"] for row in result.raw["auth_summary"])
+
+
+async def test_esp_spf_unaligned_but_dkim_aligned_passes(fake_dns, dkim_key) -> None:
+    """Normal ESP mail: SPF passes for the ESP bounce domain, DKIM aligns with From."""
+    fake_dns(
+        {
+            DKIM_KEY_NAME: [dkim_key.dns_record],
+            ("esp.test", "TXT"): ["v=spf1 ip4:198.51.100.0/24 -all"],
+            ("_dmarc.signer.test", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    signed = dkim_key.sign(_message(return_path="bounces+123@esp.test"))
+    result = await header.analyze(parse_email(signed))
+
+    assert _dmarc(result) == {}
+    assert result.raw["dmarc"]["result"] == "pass"
+    spf_row = result.raw["auth_summary"][0]
+    assert (spf_row["result"], spf_row["domain"], spf_row["aligned"]) == (
+        "pass",
+        "esp.test",
+        False,
+    )
+
+
+async def test_p_none_spoof(fake_dns) -> None:
+    fake_dns(
+        {
+            ("signer.test", "TXT"): ["v=spf1 ip4:192.0.2.1 -all"],
+            ("_dmarc.signer.test", "TXT"): ["v=DMARC1; p=none"],
+        }
+    )
+    result = await header.analyze(parse_email(_message(return_path="bounce@signer.test")))
+    findings = _dmarc(result)
+    assert set(findings) == {"dmarc_fail", "dmarc_policy_none"}
+    assert findings["dmarc_policy_none"].severity == Severity.LOW
+    assert result.raw["dmarc"]["policy"] == "none"
+    assert result.raw["spf"]["result"] == "fail"
+
+
+@pytest.mark.parametrize(("adkim", "aligned"), [("s", False), ("r", True)])
+async def test_strict_alignment_with_subdomain(
+    fake_dns, dkim_key, adkim: str, aligned: bool
+) -> None:
+    fake_dns(
+        {
+            ("sel._domainkey.mail.signer.test", "TXT"): [dkim_key.dns_record],
+            ("_dmarc.signer.test", "TXT"): [f"v=DMARC1; p=reject; adkim={adkim}"],
+        }
+    )
+    signed = dkim_key.sign(_message(), domain="mail.signer.test")
+    result = await header.analyze(parse_email(signed))
+
+    assert result.raw["dmarc"]["dkim_aligned"] is aligned
+    findings = _dmarc(result)
+    if aligned:
+        assert findings == {}
+    else:
+        assert set(findings) == {"dkim_pass_unaligned", "auth_but_unaligned", "dmarc_fail"}
+        assert findings["dkim_pass_unaligned"].evidence["dkim_domains"] == ["mail.signer.test"]
+
+
+async def test_dmarc_dns_error_gives_temperror_without_policy_findings(fake_dns) -> None:
+    fake_dns({("_dmarc.microsoft.com", "TXT"): dns.exception.Timeout()})
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert result.raw["dmarc"]["result"] == "temperror"
+    assert _dmarc(result) == {}
+
+
+async def test_dmarc_skipped_without_from() -> None:
+    result = await header.analyze(ParsedEmail())
+    assert result.raw["dmarc"] == {"result": None, "skipped_reason": "no_from_domain"}
+    assert "auth_summary" not in result.raw

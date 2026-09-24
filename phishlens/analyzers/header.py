@@ -16,6 +16,12 @@ name of that hop. The outcome is in ``raw["spf"]``.
 Every DKIM-Signature is verified (``phishlens.enrichment.dkim_check``) and described in
 ``raw["dkim"]``. Besides pass/fail, signature quality is checked on the valid signatures: an
 ``l=`` body length, From/Subject/To left out of ``h=``, and an old ``t=`` (possible replay).
+
+DMARC alignment is computed here from those SPF and DKIM results and the From domain's DMARC
+record (``phishlens.enrichment.dmarc_check``), not taken from Authentication-Results. The key
+signal is ``auth_but_unaligned``: SPF or DKIM passed, but for a domain other than the one in
+From. ``raw["dmarc"]`` holds the policy and alignment, ``raw["auth_summary"]`` one row per
+mechanism.
 """
 
 from __future__ import annotations
@@ -30,8 +36,17 @@ import authres
 
 from phishlens.config import get_settings
 from phishlens.enrichment.dkim_check import DkimSignature, verify_dkim
+from phishlens.enrichment.dmarc_check import fetch_dmarc
 from phishlens.enrichment.spf_check import check_spf
-from phishlens.models import AnalyzerResult, Finding, ParsedEmail, ReceivedHop, Severity
+from phishlens.models import (
+    Address,
+    AnalyzerResult,
+    Finding,
+    ParsedEmail,
+    ReceivedHop,
+    Severity,
+)
+from phishlens.parser.headers import org_domain
 from phishlens.parser.received import originating_external_ip
 
 MODULE = "header"
@@ -284,6 +299,160 @@ async def _check_dkim(email: ParsedEmail, result: AnalyzerResult) -> None:
         )
 
 
+def _aligned(domain: str | None, from_addr: Address, mode: str) -> bool:
+    """DMARC identifier alignment: strict = same domain, relaxed = same organizational domain."""
+    domain = (domain or "").strip().rstrip(".").lower()
+    if not domain or not from_addr.domain:
+        return False
+    if mode == "s":
+        return domain == from_addr.domain
+    return (org_domain(domain) or domain) == (from_addr.org_domain or from_addr.domain)
+
+
+def _finding(
+    finding_id: str, severity: Severity, title: str, description: str, evidence: dict
+) -> Finding:
+    return Finding(
+        id=finding_id,
+        module=MODULE,
+        title=title,
+        description=description,
+        severity=severity,
+        evidence=evidence,
+    )
+
+
+async def _check_dmarc(email: ParsedEmail, result: AnalyzerResult) -> None:
+    if not email.from_addrs or not email.from_addrs[0].domain:
+        result.raw["dmarc"] = {"result": None, "skipped_reason": "no_from_domain"}
+        return
+    from_addr = email.from_addrs[0]
+    record = await fetch_dmarc(from_addr.domain, from_addr.org_domain)
+
+    spf = result.raw.get("spf") or {}
+    spf_pass = spf.get("result") == "pass"
+    spf_aligned = spf_pass and _aligned(spf.get("domain"), from_addr, record.aspf)
+    signatures = (result.raw.get("dkim") or {}).get("signatures", [])
+    valid_sigs = [s for s in signatures if s["valid"]]
+    dkim_aligned = any(_aligned(s["domain"], from_addr, record.adkim) for s in valid_sigs)
+    dmarc_pass = spf_aligned or dkim_aligned
+    auth_but_unaligned = (spf_pass or bool(valid_sigs)) and not dmarc_pass
+    if record.error:
+        dmarc_result = "temperror"
+    elif record.found:
+        dmarc_result = "pass" if dmarc_pass else "fail"
+    else:
+        dmarc_result = "none"
+
+    result.raw["dmarc"] = {
+        **record.to_dict(),
+        "result": dmarc_result,
+        "spf_aligned": spf_aligned,
+        "dkim_aligned": dkim_aligned,
+        "dmarc_pass": dmarc_pass,
+        "auth_but_unaligned": auth_but_unaligned,
+    }
+    summary = [
+        {
+            "mechanism": "spf",
+            "result": spf.get("result") or "not_evaluated",
+            "domain": spf.get("domain"),
+            "aligned": _aligned(spf.get("domain"), from_addr, record.aspf),
+        }
+    ]
+    summary += [
+        {
+            "mechanism": "dkim",
+            "result": s["status"],
+            "domain": s["domain"],
+            "aligned": _aligned(s["domain"], from_addr, record.adkim),
+        }
+        for s in signatures
+    ] or [{"mechanism": "dkim", "result": "none", "domain": None, "aligned": False}]
+    summary.append(
+        {
+            "mechanism": "dmarc",
+            "result": dmarc_result,
+            "domain": from_addr.domain,
+            "aligned": dmarc_pass,
+        }
+    )
+    result.raw["auth_summary"] = summary
+
+    base = {"from_domain": from_addr.domain, "policy": record.policy}
+    findings = result.findings
+    if not dmarc_pass and spf_pass:
+        findings.append(
+            _finding(
+                "spf_pass_unaligned",
+                Severity.HIGH,
+                "SPF passed for a different domain than From",
+                f"SPF passed for '{spf.get('domain')}', which does not align with the From "
+                f"domain '{from_addr.domain}'. The pass says nothing about the visible sender.",
+                {**base, "spf_domain": spf.get("domain"), "mode": record.aspf},
+            )
+        )
+    if not dmarc_pass and valid_sigs:
+        findings.append(
+            _finding(
+                "dkim_pass_unaligned",
+                Severity.HIGH,
+                "DKIM passed for a different domain than From",
+                f"Valid DKIM signatures exist, but none aligns with the From domain "
+                f"'{from_addr.domain}'.",
+                {**base, "dkim_domains": [s["domain"] for s in valid_sigs], "mode": record.adkim},
+            )
+        )
+    if auth_but_unaligned:
+        findings.append(
+            _finding(
+                "auth_but_unaligned",
+                Severity.CRITICAL,
+                "Authenticated, but not as the From domain",
+                f"The message authenticates (SPF/DKIM pass) only for other domains, not for "
+                f"'{from_addr.domain}' shown in From. This is how From-domain spoofing passes "
+                "naive checks.",
+                {
+                    **base,
+                    "spf_domain": spf.get("domain") if spf_pass else None,
+                    "dkim_domains": [s["domain"] for s in valid_sigs],
+                },
+            )
+        )
+    if record.found and not dmarc_pass:
+        findings.append(
+            _finding(
+                "dmarc_fail",
+                Severity.HIGH,
+                "DMARC fail",
+                f"Neither SPF nor DKIM passed in alignment with '{from_addr.domain}'. Its DMARC "
+                f"policy is '{record.policy}'.",
+                {**base, "record": record.record, "record_domain": record.record_domain},
+            )
+        )
+    if not record.found and not record.error:
+        findings.append(
+            _finding(
+                "dmarc_none_record",
+                Severity.LOW,
+                "No DMARC record for the From domain",
+                f"'{from_addr.domain}' publishes no DMARC policy, so receivers are not told to "
+                "reject mail that spoofs it.",
+                base,
+            )
+        )
+    if record.found and record.policy == "none":
+        findings.append(
+            _finding(
+                "dmarc_policy_none",
+                Severity.LOW,
+                "DMARC policy is none (monitor only)",
+                f"'{from_addr.domain}' has DMARC p=none, so failing mail is still delivered.",
+                {**base, "record": record.record},
+            )
+        )
+
+
 async def analyze(email: ParsedEmail) -> AnalyzerResult:
     """Analyze the email's headers. Never raises; errors go into ``AnalyzerResult.errors``."""
     start = time.perf_counter()
@@ -300,5 +469,9 @@ async def analyze(email: ParsedEmail) -> AnalyzerResult:
         await _check_dkim(email, result)
     except Exception as exc:
         result.errors.append(f"dkim: {type(exc).__name__}: {exc}")
+    try:
+        await _check_dmarc(email, result)
+    except Exception as exc:
+        result.errors.append(f"dmarc: {type(exc).__name__}: {exc}")
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result

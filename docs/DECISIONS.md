@@ -312,3 +312,36 @@
     an archived message whose signature has since expired is reported as `expired`.
 - `cryptography` is added to the dev dependencies because the tests generate RSA keys with it
   (it is already installed as a dependency of msoffcrypto-tool).
+
+## P2.4: DMARC policy and alignment
+
+- `phishlens/enrichment/dmarc_check.py` finds the record at `_dmarc.<From domain>`, then at
+  `_dmarc.<org domain>` (RFC 7489 6.6.3), through the DNS helper. The effective `policy` is `sp`
+  (default `p`) when the record came from the organizational domain, else `p`. Records are parsed
+  by hand (a simple tag list), not with `checkdmarc`, which would do its own DNS lookups.
+- Lenient parsing, each fallback noted in `warnings`: invalid or missing `p=` -> `none`, invalid
+  `sp=` -> use `p=`, invalid `adkim`/`aspf` -> relaxed, invalid `pct` -> 100. More than one
+  DMARC record means no policy (RFC 7489). A DNS timeout or failure sets `error`, and the DMARC
+  result becomes `temperror`.
+- Alignment is computed from our own SPF (P2.2) and DKIM (P2.3) results, never from
+  Authentication-Results: relaxed = same organizational domain (`parser.headers.org_domain`),
+  strict = exact domain. `dkim_aligned` counts only signatures with status `pass`. For SPF the
+  authenticated domain is the MAIL FROM domain, or the HELO name for a null MAIL FROM (RFC 7489
+  3.1.2). Trusted Authentication-Results are not used as a fallback when our own SPF/DKIM could
+  not run. That keeps a single source of truth. We can revisit if real samples show gaps.
+- Only the first From address is used. Multiple From headers are handled in P2.5.
+- DMARC `result`: `pass`/`fail` when a record exists, `none` without one, `temperror` on a DNS
+  error. `raw["dmarc"]` holds the record fields plus `result`, `spf_aligned`, `dkim_aligned`,
+  `dmarc_pass` and `auth_but_unaligned`. `raw["auth_summary"]` has one row per mechanism
+  (`mechanism`, `result`, `domain`, `aligned`): SPF, each DKIM signature (or a `none` row), and
+  DMARC. For SPF/DKIM rows `aligned` is domain alignment, whatever the result.
+- Deviation from the plan: `spf_pass_unaligned` and `dkim_pass_unaligned` (high) are raised only
+  when DMARC does not pass. Ordinary ESP mail has SPF passing for the ESP's bounce domain while
+  DKIM aligns with From. Flagging that high would hit most legitimate bulk mail.
+- Findings: `auth_but_unaligned` (critical; SPF or DKIM passed but DMARC did not, with or
+  without a DMARC record), `spf_pass_unaligned` / `dkim_pass_unaligned` (high), `dmarc_fail`
+  (high; record exists and no aligned pass), `dmarc_none_record` (low; no record and no DNS
+  error) and `dmarc_policy_none` (low; effective policy is none). `dmarc_none_record` and
+  `dmarc_policy_none` describe the From domain's setup rather than the message, so both stay
+  low. The final weighting comes from `weights.yaml` in P10.1. On `temperror` no DMARC policy
+  finding is raised, but the alignment findings still are, because they need no record.
