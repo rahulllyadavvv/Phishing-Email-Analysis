@@ -48,9 +48,7 @@ def _render_progress(placeholder: Any, title: str) -> Any:
 
 def _follow(created: list[dict[str, Any]]) -> None:
     """Show one live progress card per case, then open the case view."""
-    cards = {
-        c["case_id"]: (st.empty(), c.get("filename") or "Email") for c in created
-    }
+    cards = {c["case_id"]: (st.empty(), c.get("filename") or "Email") for c in created}
     renderers = {cid: _render_progress(box, title) for cid, (box, title) in cards.items()}
     final = poll(
         list(cards),

@@ -45,6 +45,7 @@ from phishlens.models import AnalysisReport
 from phishlens.reporting.generate import FORMATS
 from phishlens.reporting.safe import defang_text
 from phishlens.reporting.summary import build_recommendations, build_summary
+from phishlens.scoring.weights import scoring_config
 
 __all__ = ["app", "create_app"]
 
@@ -160,6 +161,25 @@ def _summary(case: db.Case) -> dict[str, Any]:
         "score": case.score,
         "confidence": case.confidence,
         "status": case.status,
+    }
+
+
+DAY_BUCKETS = ("clean", "suspicious", "malicious", "pending", "error")
+
+
+def _public_config() -> dict[str, Any]:
+    """Thresholds and switches the Settings page shows (read-only, never a secret)."""
+    settings = get_settings()
+    return {
+        "thresholds": {
+            case_type: t.model_dump() for case_type, t in scoring_config().thresholds.items()
+        },
+        "scorer": settings.scorer,
+        "vt_malicious_threshold": settings.vt_malicious_threshold,
+        "ml_phishing_threshold": settings.ml_phishing_threshold,
+        "upload_files_to_vt": settings.upload_files_to_vt,
+        "upload_files_to_hybrid_analysis": settings.upload_files_to_hybrid_analysis,
+        "llm_tone_enabled": settings.llm_tone_enabled,
     }
 
 
@@ -326,8 +346,8 @@ def create_app() -> FastAPI:
             rows = session.exec(select(db.Case.verdict, db.Case.created_at, db.Case.status)).all()
         verdicts = Counter(v or "pending" for v, _, s in rows if s != "error")
         recent = Counter(
-            created.date().isoformat()
-            for _, created, _ in rows
+            (created.date().isoformat(), verdict or ("error" if status == "error" else "pending"))
+            for verdict, created, status in rows
             if created.replace(tzinfo=created.tzinfo or UTC) >= since
         )
         today = datetime.now(UTC).date()
@@ -337,7 +357,14 @@ def create_app() -> FastAPI:
             "by_verdict": {k: verdicts.get(k, 0) for k in
                            ("clean", "suspicious", "malicious", "pending")},
             "errors": sum(1 for _, _, s in rows if s == "error"),
-            "per_day": [{"date": d, "count": recent.get(d, 0)} for d in days],
+            "per_day": [
+                {
+                    "date": d,
+                    "count": sum(n for (day, _), n in recent.items() if day == d),
+                    **{v: recent.get((d, v), 0) for v in DAY_BUCKETS},
+                }
+                for d in days
+            ],
         }
 
     @app.delete("/api/cases/{case_id}", status_code=204)
@@ -370,6 +397,7 @@ def create_app() -> FastAPI:
             "auth": "api_key" if auth_enabled() else "disabled",
             "services": get_settings().configured_services(),
             "formats": list(FORMATS),
+            "config": _public_config(),
         }
 
     return app

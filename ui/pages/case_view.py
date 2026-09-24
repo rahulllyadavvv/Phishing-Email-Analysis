@@ -67,7 +67,7 @@ def _header(report: dict[str, Any]) -> None:
             data=_downloader(case_id, fmt),
             file_name=f"{case_id}_{name}.{ext}",
             key=f"dl-{fmt}",
-            use_container_width=True,
+            width="stretch",
         )
 
 
@@ -111,22 +111,22 @@ def _headers(report: dict[str, Any]) -> None:
         f"**Header verdict:** {verdict.get('verdict', 'unknown')} — {verdict.get('reason', '')}"
     )
     st.subheader("Received chain (oldest first)")
-    st.dataframe(case_data.received_rows(report), use_container_width=True, hide_index=True)
+    st.dataframe(case_data.received_rows(report), width="stretch", hide_index=True)
 
 
 def _sender(report: dict[str, Any]) -> None:
     domain = case_data.raw(report, "domain")
     st.subheader("Addresses")
-    st.dataframe(domain.get("domain_table") or [], use_container_width=True, hide_index=True)
+    st.dataframe(domain.get("domain_table") or [], width="stretch", hide_index=True)
     lookalikes = [m for matches in (domain.get("lookalikes") or {}).values() for m in matches]
     st.subheader("Lookalike domains")
     if lookalikes:
-        st.dataframe(lookalikes, use_container_width=True, hide_index=True)
+        st.dataframe(lookalikes, width="stretch", hide_index=True)
     else:
         st.caption("No findings")
     st.subheader("Domain age")
     ages = [{"domain": k, **v} for k, v in (domain.get("domain_age") or {}).items()]
-    st.dataframe(ages or [], use_container_width=True, hide_index=True)
+    st.dataframe(ages or [], width="stretch", hide_index=True)
     identity = domain.get("identity") or {}
     with st.container(border=True):
         st.markdown("**Identity binding**")
@@ -182,7 +182,7 @@ def _urls(report: dict[str, Any]) -> None:
         return
     st.dataframe(
         [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     shots = [r for r in rows if r["_screenshot"]]
@@ -199,7 +199,7 @@ def _attachments(report: dict[str, Any]) -> None:
         return
     st.dataframe(
         [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     tree = case_data.archive_tree(rows)
@@ -235,7 +235,7 @@ def _iocs(report: dict[str, Any]) -> None:
     chosen_types = left.multiselect("Type", types, key="ioc-types")
     chosen_verdicts = right.multiselect("Verdict", verdicts, key="ioc-verdicts")
     rows = case_data.filter_iocs(iocs, chosen_types, chosen_verdicts)
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    st.dataframe(rows, width="stretch", hide_index=True)
     st.caption("Defanged values, one per line (use the copy button):")
     theme.defanged_code("\n".join(r["value"] for r in rows) or "-")
 
@@ -267,7 +267,7 @@ def _all_findings(report: dict[str, Any]) -> None:
         return
     st.dataframe(
         [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
     for row in rows:

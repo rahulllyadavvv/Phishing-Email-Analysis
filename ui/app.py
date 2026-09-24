@@ -38,10 +38,15 @@ def sidebar() -> None:
 
 
 pages = [
-    st.Page(HERE / "pages" / "analyze.py", title="Analyze", icon=":material/upload_file:",
-            default=True),
-    st.Page(HERE / "pages" / "case_view.py", title="Case view", icon=":material/find_in_page:",
-            url_path="case"),
+    st.Page(
+        HERE / "pages" / "analyze.py", title="Analyze", icon=":material/upload_file:", default=True
+    ),
+    st.Page(
+        HERE / "pages" / "case_view.py",
+        title="Case view",
+        icon=":material/find_in_page:",
+        url_path="case",
+    ),
     st.Page(HERE / "pages" / "history.py", title="History", icon=":material/history:"),
     st.Page(HERE / "pages" / "settings.py", title="Settings", icon=":material/settings:"),
 ]

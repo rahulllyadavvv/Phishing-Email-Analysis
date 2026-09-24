@@ -142,8 +142,10 @@ def download_report(case_id: str, fmt: str) -> tuple[bytes, str]:
     """Report file bytes and the file name the backend suggests."""
     response = _request("GET", f"/api/cases/{case_id}/report", params={"format": fmt})
     disposition = response.headers.get("content-disposition", "")
-    name = disposition.split("filename=")[-1].strip('"') if "filename=" in disposition else (
-        f"{case_id}.{fmt}"
+    name = (
+        disposition.split("filename=")[-1].strip('"')
+        if "filename=" in disposition
+        else (f"{case_id}.{fmt}")
     )
     return response.content, name
 

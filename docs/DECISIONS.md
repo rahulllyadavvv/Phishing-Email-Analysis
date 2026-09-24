@@ -1564,3 +1564,22 @@ Plan reviewed and approved before building.
 - **Cases that are not finished** (queued/running) show their status and a Refresh button
   instead of a partial report. A failed case that still has a verdict shows the report with a
   warning.
+
+## P13.4: History and Settings pages
+
+- **The API gained two read-only fields.** `/api/stats` `per_day` entries now also count each
+  verdict (`clean`, `suspicious`, `malicious`, `pending`, `error`) so the History chart can stack
+  verdicts over 30 days. `/api/health` has a `config` block with the verdict thresholds (from
+  `data/weights.yaml`), scorer, VirusTotal and ML thresholds and the upload/LLM switches, so the
+  Settings page shows the backend's real configuration. No secret is ever part of it.
+- **Settings is read-only.** Configuration lives in the backend's environment / `.env`; the UI
+  only displays it. Service names, purposes, setting names and sign-up links are in
+  `ui/services.yaml` (a test keeps it in sync with `SERVICE_FIELDS`). Sign-up links are the
+  project's own static links, not analyzed values, so they are clickable.
+- **Opening and deleting cases.** The table has a relative `Open` link per row (`case?id=...`)
+  and, for keyboard use and testability, a case picker with *Open case* / *Delete case* buttons.
+  Delete asks for confirmation inline (a warning with *Yes, delete* / *Cancel*) rather than a
+  modal dialog.
+- **Paging.** 25 cases per page; any filter change goes back to page 1, and a page that no
+  longer exists (after deletions) falls back to the last page.
+- `use_container_width` is deprecated in Streamlit 1.64; the UI uses `width="stretch"`.

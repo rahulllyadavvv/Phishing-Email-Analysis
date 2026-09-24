@@ -1,0 +1,42 @@
+# Threat-intel services shown on the Settings page: what each is for, the setting that enables
+# it and where to get a key. Keys match phishlens.config.SERVICE_FIELDS.
+virustotal:
+  name: VirusTotal
+  purpose: File hash, URL, domain and IP reputation
+  setting: VIRUSTOTAL_API_KEY
+  signup: https://www.virustotal.com/gui/join-us
+abusech:
+  name: abuse.ch (MalwareBazaar, URLhaus, ThreatFox)
+  purpose: Known malware hashes and malicious URLs
+  setting: ABUSECH_API_KEY
+  signup: https://auth.abuse.ch/
+google_safebrowsing:
+  name: Google Safe Browsing
+  purpose: Phishing and malware URL lists
+  setting: GOOGLE_SAFEBROWSING_API_KEY
+  signup: https://developers.google.com/safe-browsing/v4/get-started
+urlscan:
+  name: urlscan.io
+  purpose: Remote page scan with screenshot and final URL
+  setting: URLSCAN_API_KEY
+  signup: https://urlscan.io/user/signup
+abuseipdb:
+  name: AbuseIPDB
+  purpose: Sending IP reputation
+  setting: ABUSEIPDB_API_KEY
+  signup: https://www.abuseipdb.com/register
+hybrid_analysis:
+  name: Hybrid Analysis
+  purpose: Sandbox reports for attachments
+  setting: HYBRID_ANALYSIS_API_KEY
+  signup: https://www.hybrid-analysis.com/signup
+cape:
+  name: CAPE sandbox (self-hosted)
+  purpose: Sandbox reports from your own CAPE instance
+  setting: CAPE_BASE_URL
+  signup: https://github.com/kevoreilly/CAPEv2
+llm:
+  name: Claude (Anthropic API)
+  purpose: Optional second opinion on the email's tone
+  setting: LLM_API_KEY
+  signup: https://console.anthropic.com/

@@ -133,6 +133,7 @@ def test_list_filters_and_stats(client) -> None:
     assert stats["total"] == 3
     assert stats["by_verdict"]["malicious"] == 2 and stats["by_verdict"]["clean"] == 1
     assert len(stats["per_day"]) == 30 and stats["per_day"][-1]["count"] == 3
+    assert stats["per_day"][-1]["malicious"] == 2 and stats["per_day"][-1]["clean"] == 1
 
 
 def test_delete_removes_everything(client) -> None:
@@ -164,6 +165,9 @@ def test_health(client, monkeypatch) -> None:
     assert health["queue"]["queue"] == "sync"
     assert health["services"]["virustotal"] is True
     assert "secret-value" not in json.dumps(health)
+    config = health["config"]
+    assert config["thresholds"]["email"] == {"suspicious": 30, "malicious": 60}
+    assert config["upload_files_to_vt"] is False and config["scorer"] == "rule"
 
 
 # --- P12.4: security and deduplication ------------------------------------------------------------
