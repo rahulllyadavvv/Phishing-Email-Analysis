@@ -1308,3 +1308,32 @@ Plan reviewed and approved before building.
 - Real run: `phishlens analyze tests/fixtures/spoof_unaligned.eml` with live network printed
   MALICIOUS 100/100 (real DNS: SPF fail for zetatech.xyz, microsoft.com DMARC p=reject; top
   reasons "Impersonates Microsoft", "DMARC fail", "SPF fail") and wrote JSON, CSV and STIX.
+
+## P11.1: HTML report template
+
+- `phishlens/reporting/templates/report.html` (Jinja2), rendered by `reporting/html.py`
+  (`render_html(report, summary=None, recommendations=None)`) from a view model
+  (`reporting/view.py`, which reads analyzer raw data so the template stays simple). The page is
+  self-contained: inline CSS, no scripts, no external assets, a Content-Security-Policy meta tag
+  allowing only inline styles and data images, and `referrer: no-referrer`. It is
+  print-friendly (A4 `@page` with page numbers for WeasyPrint, table headers repeated on each
+  page, rows not split).
+- Sections a-o as planned. Empty sections show "No findings" (or a specific message). In file
+  cases the email-only sections are replaced by one note, and skipped analyzers are left out of
+  the score breakdown.
+- Output safety is enforced centrally, not per field (`reporting/safe.py`):
+  - The Jinja environment autoescapes everything, uses `StrictUndefined` (template mistakes
+    fail in tests), and its `finalize` hook defangs *every* string it outputs: URLs, emails,
+    IPv4 and bare domains, while numbers, versions (`1.2.3`) and times stay unchanged. This also
+    covers older analyzers whose descriptions/evidence contain undefanged values (the open
+    point from P5.1): in the HTML report nothing leaks.
+  - Opt-outs are explicit: `Plain` (file names, hashes, MIME types, IDs; still escaped) and
+    `Link`, which is clickable only for `https://attack.mitre.org` and `https://urlscan.io`
+    (screenshots and results); any other URL renders as defanged text. Tests check that the
+    HTML contains no other `href`/`src`, no undefanged test indicators, and that script/HTML in
+    finding text is escaped.
+- The executive summary and recommended actions are parameters here, filled by P11.2.
+- Related fix: offline, DMARC is now "not evaluated" (skipped, reason offline) like SPF, instead
+  of a record-lookup temperror. Because of this, offline runs no longer treat the sender as
+  "not authenticated": without DNS, a forged `microsoft.com` sender cannot be told apart from a
+  real one, and fixture 2 is clean offline. The CLI spoof test now uses mocked DNS.

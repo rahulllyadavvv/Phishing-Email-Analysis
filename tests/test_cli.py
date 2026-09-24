@@ -24,10 +24,20 @@ def _run(*args: str):
     return runner.invoke(app, list(args))
 
 
-def test_analyze_spoof_prints_verdict_and_reasons(tmp_path: Path) -> None:
-    result = _run(
-        "analyze", str(FIXTURES / "spoof_unaligned.eml"), "--no-network", "--out", str(tmp_path)
+def test_analyze_spoof_prints_verdict_and_reasons(tmp_path: Path, fake_dns, respx_mock) -> None:
+    """With (mocked) DNS: SPF passes for zetatech.xyz, microsoft.com has DMARC p=reject.
+    Offline, a forged microsoft.com sender cannot be told apart from a real one."""
+    from phishlens.enrichment import rdap
+
+    fake_dns(
+        {
+            ("zetatech.xyz", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"],
+            ("_dmarc.microsoft.com", "TXT"): ["v=DMARC1; p=reject"],
+            ("microsoft.com", "MX"): ["10 mx.microsoft.com"],
+        }
     )
+    respx_mock.get(url__startswith=rdap.RDAP_BOOTSTRAP_URL).respond(404)
+    result = _run("analyze", str(FIXTURES / "spoof_unaligned.eml"), "--out", str(tmp_path))
     assert result.exit_code == 0, result.output
     assert "SUSPICIOUS" in result.output or "MALICIOUS" in result.output
     assert "Impersonates Microsoft" in result.output or "Display name" in result.output

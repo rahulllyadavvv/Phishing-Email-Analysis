@@ -371,6 +371,9 @@ async def _check_dmarc(email: ParsedEmail, result: AnalyzerResult) -> None:
     if not email.from_addrs or not email.from_addrs[0].domain:
         result.raw["dmarc"] = {"result": None, "skipped_reason": "no_from_domain"}
         return
+    if not network_enabled():
+        result.raw["dmarc"] = {"result": None, "skipped_reason": "offline"}
+        return
     from_addr = email.from_addrs[0]
     record = await fetch_dmarc(from_addr.domain, from_addr.org_domain)
 
