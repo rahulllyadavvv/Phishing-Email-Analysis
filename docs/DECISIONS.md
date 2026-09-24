@@ -1408,3 +1408,27 @@ Plan reviewed and approved before building.
   (filters verdict / case_type / date range / q, which searches subject, sender and file name
   case-insensitively; newest first; offset/limit capped at 500; returns items and total).
 - SQLite stores datetimes without a timezone; they are written in UTC.
+
+## P12.2: Job queue and progress
+
+- `api/worker.py`. Uploads are stored at `<QUARANTINE_DIR>/uploads/<case_id>/input.bin`: a
+  generated name, never the uploader's file name, and never in a served folder. Reports go to
+  `<REPORTS_DIR>/<case_id>/` (new setting, default `reports`, gitignored); they are downloaded
+  through the API, not served statically.
+- `run_analysis(case_id, stored_input_path, filename, mode)` is the job. Modes: `auto`
+  (`analyze_input`, routes by content), `file` (`analyze_file`) and `email` (`analyze_email`,
+  for pasted source). The pipeline gets the DB case ID. Per-module progress is written through
+  the pipeline's progress callback, plus a `job` entry (running/done/error). Every format is
+  generated. The Case row gets status, verdict, score, confidence, case type, subject, sender,
+  `report_files` and `report_json_path`.
+- Failures: loader errors, missing files, disk errors and anything unexpected set status `error`
+  with a message (up to 2000 characters). When the analysis itself finished but report writing
+  failed, a partial JSON + HTML is still attempted and the verdict recorded.
+- Progress store: `RedisProgressStore` (hash `progress:<case_id>`, expires after 7 days) or
+  `MemoryProgressStore` (thread-safe; tests and sync mode).
+- Queues: `RQQueue` (queue `phishlens`, job ID `analysis-<case_id>`, 1 h timeout; run workers
+  with `rq worker phishlens`) and `SyncQueue` (runs the job at once in the calling thread). A new
+  setting `JOB_QUEUE=rq|sync` picks one; sync also lets the API run without Redis for local use.
+  `healthy()` reports Redis reachability and the number of RQ workers for `/api/health`.
+- `fakeredis` is a new dev dependency to test the Redis store without a server. The worker tests
+  run real jobs through `SyncQueue` in the fake internet with a temporary SQLite database.

@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     # Infrastructure.
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "sqlite:///phishlens.sqlite"
+    # Job queue for the API: "rq" (Redis + an `rq worker phishlens` process) or "sync" (runs
+    # each analysis in the API process; for local use without Redis).
+    job_queue: str = "rq"
+    reports_dir: str = "reports"
 
     # DNS helper: per-query timeout, cache lifetime, and the optional SQLite cache file.
     dns_timeout_seconds: float = Field(default=5.0, gt=0)
@@ -179,6 +183,14 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_dots(cls, value: list[str]) -> list[str]:
         return [ext.lstrip(".") for ext in value if ext.lstrip(".")]
+
+    @field_validator("job_queue")
+    @classmethod
+    def _check_queue(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in ("rq", "sync"):
+            raise ValueError("JOB_QUEUE must be rq or sync")
+        return value
 
     @field_validator("scorer")
     @classmethod
