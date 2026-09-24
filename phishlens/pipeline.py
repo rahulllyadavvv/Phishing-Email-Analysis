@@ -14,10 +14,17 @@
    scoring;
 6. an ``AnalysisReport``.
 
+``analyze_file(raw_bytes, filename)`` handles a standalone file: the attachment analyzer
+(``analyze_files``), the URL analyzer on URLs found inside it, IOCs, MITRE and scoring with the
+file thresholds; the email-only analyzers are marked skipped ("not an email").
+``analyze_input(raw_bytes, filename)`` routes by content (``ingest.load_input``): anything that
+is really an email (.eml, or .msg converted to RFC 822) goes to ``analyze_email``.
+
 Every analyzer runs with a timeout (``ANALYZER_TIMEOUT_SECONDS``; the attachment analyzer uses
 ``ATTACHMENT_TIMEOUT_SECONDS`` because it may wait for a sandbox). An analyzer that fails or
 times out is recorded as an error result and the pipeline carries on. ``progress_cb(module,
-status)`` (plain function or coroutine) receives ``pending``/``running``/``done``/``error``.
+status)`` (plain function or coroutine) receives ``pending``/``running``/``done``/``error``
+(and ``skipped`` for the email-only analyzers in a file case).
 ``network=False`` runs everything offline (no DNS, no HTTP, no LLM).
 """
 
@@ -33,6 +40,7 @@ from phishlens import __version__
 from phishlens.analyzers import artifacts, attachments, domain, header, tone, urls
 from phishlens.config import SERVICE_FIELDS, get_settings
 from phishlens.enrichment.network import network_enabled, offline
+from phishlens.ingest.loader import load_input
 from phishlens.ioc.extract import VERDICT_ORDER, extract_iocs
 from phishlens.mapping.mitre import map_findings
 from phishlens.models import (
@@ -45,11 +53,23 @@ from phishlens.models import (
     ParsedEmail,
 )
 from phishlens.parser import parse_email
+from phishlens.parser.attachments import make_attachment
 from phishlens.scoring import get_scorer
 
-__all__ = ["EMAIL_MODULES", "ProgressCallback", "analyze_email", "merge_iocs", "run_analyzer"]
+__all__ = [
+    "EMAIL_MODULES",
+    "FILE_SKIPPED_MODULES",
+    "ProgressCallback",
+    "analyze_email",
+    "analyze_file",
+    "analyze_input",
+    "merge_iocs",
+    "run_analyzer",
+]
 
 EMAIL_MODULES = ("header", "domain", "tone", "artifacts", "attachments", "urls")
+FILE_SKIPPED_MODULES = ("header", "domain", "tone", "artifacts")
+NOT_AN_EMAIL = "not an email"
 ProgressCallback = Callable[[str, str], Any]
 
 
@@ -265,3 +285,69 @@ async def analyze_email(
         report = build_report(case_id, CaseType.EMAIL, results, iocs, email=email)
         await progress("scoring", "done")
     return report
+
+
+async def analyze_file(
+    raw_bytes: bytes,
+    filename: str,
+    progress_cb: ProgressCallback | None = None,
+    *,
+    network: bool = True,
+    case_id: str | None = None,
+) -> AnalysisReport:
+    """Analyze one standalone file (not an email). Never raises for analyzer problems."""
+    case_id = case_id or uuid.uuid4().hex
+    progress = _Progress(progress_cb)
+    settings = get_settings()
+    with offline(not network):
+        net = network_enabled()
+        file = make_attachment(filename or "upload.bin", raw_bytes)
+        results: dict[str, AnalyzerResult] = {}
+        for name in FILE_SKIPPED_MODULES:
+            results[name] = AnalyzerResult(
+                module=name, skipped=True, raw={"skipped_reason": NOT_AN_EMAIL}
+            )
+            await progress(name, "skipped")
+        await progress("attachments", "pending")
+        await progress("urls", "pending")
+        results["attachments"] = await run_analyzer(
+            "attachments",
+            lambda: attachments.analyze_files([file], case_id, reputation=net, sandbox=net),
+            settings.attachment_timeout_seconds,
+            progress,
+        )
+        extracted = results["attachments"].extracted_urls
+        no_email = ParsedEmail()
+        results["urls"] = await run_analyzer(
+            "urls",
+            lambda: urls.analyze(no_email, dict(results), extra_urls=extracted, reputation=net),
+            settings.analyzer_timeout_seconds,
+            progress,
+        )
+        rows = results["attachments"].raw.get("attachments") or [{}]
+        detected = rows[0].get("detected_type")
+        file_info = file.model_copy(update={"detected_type": detected})
+        iocs = extract_iocs(None, results)
+        await progress("scoring", "running")
+        report = build_report(case_id, CaseType.FILE, results, iocs, file_info=file_info)
+        await progress("scoring", "done")
+    return report
+
+
+async def analyze_input(
+    raw_bytes: bytes,
+    filename: str | None = None,
+    progress_cb: ProgressCallback | None = None,
+    *,
+    network: bool = True,
+    case_id: str | None = None,
+) -> AnalysisReport:
+    """Route by content: emails (.eml, or .msg converted to RFC 822) to ``analyze_email``,
+    everything else to ``analyze_file``. Raises ``LoaderError`` for oversize or broken .msg
+    input (checked before any analysis)."""
+    kind, data = load_input(raw_bytes, filename)
+    if kind == "email":
+        return await analyze_email(data, progress_cb, network=network, case_id=case_id)
+    return await analyze_file(
+        data, filename or "upload.bin", progress_cb, network=network, case_id=case_id
+    )

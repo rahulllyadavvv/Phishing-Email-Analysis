@@ -1262,3 +1262,21 @@ Plan reviewed and approved before building.
   gets its expected verdict. One weight changed: `hidden_text` 15 -> 25, because text hidden
   to fool filters is deliberate evasion and fixture 11 (suspicious) scored only 22 before.
   `qr_code.eml` needs zbar to be judged and is skipped without it.
+
+## P10.3: Standalone file pipeline
+
+- `analyze_file(raw_bytes, filename, progress_cb=None, *, network=True, case_id=None)`: the file
+  becomes one `Attachment` (hashes computed by `make_attachment`), then
+  `attachments.analyze_files([file], case_id)` (unpacking, reputation, content, sandbox,
+  quarantine under the case ID), then the URL analyzer on the URLs found inside the file (with
+  an empty `ParsedEmail`), then IOCs (`extract_iocs(None, ...)`), MITRE and scoring with
+  `case_type="file"` (thresholds 20/50).
+- header, domain, tone and artifacts get `skipped=True` results with `raw = {"skipped_reason":
+  "not an email"}`. Progress reports them as `skipped`, and they do not lower confidence.
+  `report.file_info` is the file with its detected type (no bytes are serialized).
+- `analyze_input(raw_bytes, filename)` uses `ingest.load_input` (content detection, not the
+  extension). Emails, including `.msg` converted to RFC 822, go to `analyze_email`; everything
+  else to `analyze_file`. Oversize input or a broken `.msg` raises `LoaderError` before any
+  analysis. The CLI/API turn that into a user-facing error.
+- The email and file pipelines share `run_analyzer` (timeouts, error results) and `build_report`
+  (MITRE tagging, scoring, services).
