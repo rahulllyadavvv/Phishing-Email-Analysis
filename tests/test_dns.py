@@ -61,6 +61,18 @@ async def test_txt_mx_a_records(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.ok and result.records == ["192.0.2.1"] and not result.cached
 
 
+async def test_aaaa_and_ptr_records(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(
+        monkeypatch,
+        {
+            ("example.com", "AAAA"): ["2001:db8::1"],
+            ("1.2.0.192.in-addr.arpa", "PTR"): ["mail.example.com"],
+        },
+    )
+    assert (await dns_helper.aaaa("example.com")).records == ["2001:db8::1"]
+    assert (await dns_helper.ptr("1.2.0.192.in-addr.arpa")).records == ["mail.example.com"]
+
+
 @pytest.mark.parametrize(
     ("exc", "code"),
     [
@@ -83,7 +95,7 @@ async def test_errors_are_returned_not_raised(
 
 async def test_unsupported_type_and_empty_name(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = _install(monkeypatch, {})
-    assert (await dns_helper.resolve("example.com", "AAAA")).error == "unsupported_type"
+    assert (await dns_helper.resolve("example.com", "CNAME")).error == "unsupported_type"
     assert (await dns_helper.resolve("  ", "A")).error == "error: empty name"
     assert fake.calls == []
 

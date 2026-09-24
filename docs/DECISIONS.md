@@ -228,6 +228,7 @@
   and caching.
 - Record formats: TXT character-strings are joined with no separator (as SPF/DMARC expect), MX
   records are `"<preference> <exchange>"` sorted by preference, A records are dotted IPs.
+  (P2.2 added AAAA, as IP strings, and PTR, as host names without the trailing dot.)
 - Caching: an in-memory dict, plus a SQLite table (`dns_cache`) in `DNS_CACHE_PATH` when
   `DNS_SQLITE_CACHE=true`. Both use `DNS_CACHE_TTL_SECONDS`; `0` turns caching off. Only
   definitive answers are cached (records, `nxdomain`, `no_answer`). Timeouts and other errors are
@@ -250,3 +251,31 @@
   the parse error kept in `raw`. One finding is produced per untrusted header.
 - `Finding.score` is left at 0. Scores come from `weights.yaml` in P10.1 (severity fallback: medium
   = 15).
+
+## P2.2: SPF verification
+
+- pyspf does its own synchronous DNS through the module-level `spf.DNSLookup`.
+  `phishlens/enrichment/spf_check.py` replaces it with a function that sends each query back to the
+  event loop (`asyncio.run_coroutine_threadsafe`) and answers it with our cached DNS helper, while
+  `check_spf` runs pyspf in a worker thread (`asyncio.to_thread`). So SPF lookups share the cache
+  and are mocked like all other DNS. The loop is passed in a `ContextVar`. Outside `check_spf` the
+  replacement falls back to pyspf's own resolver, so other pyspf users are not affected.
+- The DNS helper gained AAAA (for `a`/`mx` with an IPv6 sender) and PTR (for `ptr` and macros).
+  Other types (the obsolete type 99 SPF record, only queried in pyspf's harsh mode) return no
+  answer.
+- The SPF bridge lives in `enrichment/` rather than in the analyzer, because it makes DNS calls.
+- pyspf runs with default strictness and a 20 s total query time (RFC 7208 4.6.4). DNS
+  timeouts/errors -> `temperror`, broken records -> `permerror`, an unexpected exception ->
+  `temperror` with the error text in `explanation`.
+- Inputs: the IP is `originating_external_ip(received_chain, TRUSTED_INTERNAL_HOSTS)`. MAIL FROM is
+  the Return-Path address. A null Return-Path (`<>`, bounces) parses to `None`, so SPF checks the
+  HELO identity (`postmaster@<helo>`), as RFC 7208 2.4 says. HELO is the `from` host of the newest
+  hop with that IP, used only if it looks like a host name (not `[ip]` or `unknown`).
+- Nothing to evaluate: `raw["spf"] = {"result": None, "skipped_reason": ...}` with
+  `no_originating_ip` or `no_identity`, and no finding. Trusted Authentication-Results SPF results
+  are not used as a fallback here; P2.4 can decide whether to use them.
+- `raw["spf"]` when evaluated: `result`, `ip`, `identity` (`mailfrom`/`helo`), `domain` (the
+  SPF-authenticated domain), `mail_from`, `helo`, `explanation`.
+- Findings (severity, score from `weights.yaml` later): `spf_fail` high, `spf_softfail` medium,
+  `spf_none` low, `spf_error` low (both temperror and permerror). `pass` and `neutral` give no
+  finding.

@@ -1,15 +1,18 @@
-"""Tests for phishlens.analyzers.header (Authentication-Results trust checks)."""
+"""Tests for phishlens.analyzers.header (Authentication-Results trust checks and SPF).
+
+DNS is always faked: every test starts with an empty ``fake_dns`` table (all NXDOMAIN)."""
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
 
+import dns.exception
 import pytest
 
 from phishlens.analyzers import header
 from phishlens.config import get_settings
-from phishlens.models import ParsedEmail, Severity
+from phishlens.models import ParsedEmail, ReceivedHop, Severity
 from phishlens.parser import parse_email
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -17,10 +20,12 @@ ALL_FIXTURES = sorted(p.name for p in FIXTURES.glob("*.eml"))
 
 
 @pytest.fixture(autouse=True)
-def settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+def settings_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_dns) -> Iterator[None]:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("TRUSTED_AUTHSERV_IDS", raising=False)
+    monkeypatch.delenv("TRUSTED_INTERNAL_HOSTS", raising=False)
     get_settings.cache_clear()
+    fake_dns({})
     yield
     get_settings.cache_clear()
 
@@ -120,3 +125,86 @@ async def test_every_fixture_analyzes_without_errors(
     result = await header.analyze(_fixture(name))
     assert result.errors == []
     assert result.raw["auth_results"]
+    assert "spf" in result.raw
+
+
+# --- SPF -----------------------------------------------------------------------------------------
+
+SPOOF_IP = "203.0.113.45"
+
+
+def _spf(result) -> list:
+    return [f for f in result.findings if f.id.startswith("spf_")]
+
+
+@pytest.mark.parametrize(
+    ("record", "expected", "finding_id", "severity"),
+    [
+        ("v=spf1 ip4:203.0.113.45 -all", "pass", None, None),
+        ("v=spf1 ip4:192.0.2.1 -all", "fail", "spf_fail", Severity.HIGH),
+        ("v=spf1 ip4:192.0.2.1 ~all", "softfail", "spf_softfail", Severity.MEDIUM),
+        ("v=spf1 ?all", "neutral", None, None),
+        ("v=spf1 ip4:192.0.2.1 bad:mech -all", "permerror", "spf_error", Severity.LOW),
+    ],
+)
+async def test_fixture_2_spf_results(
+    fake_dns, record: str, expected: str, finding_id: str | None, severity: Severity | None
+) -> None:
+    fake_dns({("zetatech.xyz", "TXT"): [record]})
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+
+    assert result.errors == []
+    spf = result.raw["spf"]
+    assert spf["result"] == expected
+    assert spf["domain"] == "zetatech.xyz"
+    assert spf["identity"] == "mailfrom"
+    assert spf["ip"] == SPOOF_IP
+    assert spf["helo"] == "mail.zetatech.xyz"
+    findings = _spf(result)
+    if finding_id is None:
+        assert findings == []
+    else:
+        [finding] = findings
+        assert (finding.id, finding.severity) == (finding_id, severity)
+        assert finding.evidence["domain"] == "zetatech.xyz"
+        assert finding.evidence["ip"] == SPOOF_IP
+
+
+async def test_spf_none_when_no_record() -> None:
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert result.raw["spf"]["result"] == "none"
+    [finding] = _spf(result)
+    assert finding.id == "spf_none" and finding.severity == Severity.LOW
+
+
+async def test_spf_temperror_is_spf_error(fake_dns) -> None:
+    fake_dns({("zetatech.xyz", "TXT"): dns.exception.Timeout()})
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert result.raw["spf"]["result"] == "temperror"
+    [finding] = _spf(result)
+    assert finding.id == "spf_error"
+
+
+async def test_spf_falls_back_to_helo_without_return_path(fake_dns) -> None:
+    fake_dns({("mail.zetatech.xyz", "TXT"): ["v=spf1 ip4:203.0.113.45 -all"]})
+    email = _fixture("spoof_unaligned.eml").model_copy(update={"return_path": None})
+    result = await header.analyze(email)
+    spf = result.raw["spf"]
+    assert (spf["result"], spf["identity"], spf["domain"]) == ("pass", "helo", "mail.zetatech.xyz")
+
+
+async def test_spf_uses_ip_behind_trusted_internal_hosts(
+    monkeypatch: pytest.MonkeyPatch, fake_dns
+) -> None:
+    monkeypatch.setenv("TRUSTED_INTERNAL_HOSTS", "203.0.113.0/24")
+    get_settings.cache_clear()
+    result = await header.analyze(_fixture("spoof_unaligned.eml"))
+    assert result.raw["spf"] == {"result": None, "skipped_reason": "no_originating_ip"}
+    assert _spf(result) == []
+
+
+async def test_spf_skipped_without_identity() -> None:
+    email = ParsedEmail(received_chain=[ReceivedHop(from_host="[203.0.113.45]", ip=SPOOF_IP)])
+    result = await header.analyze(email)
+    assert result.raw["spf"] == {"result": None, "ip": SPOOF_IP, "skipped_reason": "no_identity"}
+    assert _spf(result) == []

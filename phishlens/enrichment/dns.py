@@ -1,4 +1,4 @@
-"""Cached async DNS helper for TXT, MX and A lookups.
+"""Cached async DNS helper for TXT, MX, A, AAAA and PTR lookups.
 
 All DNS lookups in PhishLens go through this module. Results are cached in memory and, when
 ``DNS_SQLITE_CACHE`` is on, in a SQLite file (``DNS_CACHE_PATH``) so repeated analyses do not hit
@@ -23,9 +23,11 @@ import dns.resolver
 
 from phishlens.config import get_settings
 
-__all__ = ["DnsResult", "SUPPORTED_TYPES", "a", "clear_cache", "mx", "resolve", "txt"]
+__all__ = [
+    "DnsResult", "SUPPORTED_TYPES", "a", "aaaa", "clear_cache", "mx", "ptr", "resolve", "txt"
+]
 
-SUPPORTED_TYPES = frozenset({"TXT", "MX", "A"})
+SUPPORTED_TYPES = frozenset({"TXT", "MX", "A", "AAAA", "PTR"})
 CACHEABLE_ERRORS = frozenset({"nxdomain", "no_answer"})
 
 
@@ -34,7 +36,8 @@ class DnsResult:
     """Answer for one ``(name, rdtype)`` lookup.
 
     ``records`` are strings: TXT records with their character-strings joined, MX records as
-    ``"<preference> <exchange>"`` (sorted by preference) and A records as dotted IPs.
+    ``"<preference> <exchange>"`` (sorted by preference), A/AAAA records as IP strings and PTR
+    records as host names without the trailing dot.
     ``error`` is ``None`` on success. ``cached`` tells whether the answer came from the cache.
     """
 
@@ -71,6 +74,8 @@ async def _query(name: str, rdtype: str, timeout: float) -> list[str]:
     if rdtype == "MX":
         mx_records = sorted(answer, key=lambda r: r.preference)
         return [f"{r.preference} {r.exchange.to_text(omit_final_dot=True)}" for r in mx_records]
+    if rdtype == "PTR":
+        return [r.target.to_text(omit_final_dot=True) for r in answer]
     return [r.to_text() for r in answer]
 
 
@@ -122,7 +127,7 @@ def _sqlite_put(path: str, result: DnsResult, expires_at: float) -> None:
 
 
 async def resolve(name: str, rdtype: str) -> DnsResult:
-    """Look up ``name`` for ``rdtype`` (TXT, MX or A), using the caches. Never raises."""
+    """Look up ``name`` for ``rdtype`` (see ``SUPPORTED_TYPES``), using the caches. Never raises."""
     name = _normalize(name)
     rdtype = rdtype.upper()
     if rdtype not in SUPPORTED_TYPES:
@@ -168,3 +173,11 @@ async def mx(name: str) -> DnsResult:
 
 async def a(name: str) -> DnsResult:
     return await resolve(name, "A")
+
+
+async def aaaa(name: str) -> DnsResult:
+    return await resolve(name, "AAAA")
+
+
+async def ptr(name: str) -> DnsResult:
+    return await resolve(name, "PTR")
