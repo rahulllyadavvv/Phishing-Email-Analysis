@@ -409,3 +409,25 @@
   `zoom meeting`).
 - A test checks that no domain is listed for two brands, and that every data file starts with a
   comment explaining how to extend it.
+
+## P3.2: Domain consistency and display-name spoofing
+
+- `phishlens/analyzers/domain.py`, module name `domain`. The Sender header is shown in
+  `raw["domain_table"]` but produces no finding (the plan lists none for it).
+- Comparisons use organizational domains, so `bounce@mail.company.example` matches
+  `company.example`.
+- `returnpath_mismatch` is low, or info when the Return-Path is a known ESP (normal for bulk
+  mail). A mismatched Return-Path is very common in legitimate mail, so the weight is kept low.
+- `replyto_mismatch` (medium) fires when a Reply-To address's org domain differs from From.
+  `replyto_free_webmail` fires when a Reply-To is free webmail: high when From is not free webmail
+  (a company asking for replies at gmail), medium otherwise. A Reply-To identical to From is
+  ignored. Both can fire for the same address, since they describe different facts.
+- `display_name_brand_spoof` (high): a brand keyword in a From display name while the address is
+  free webmail, or not on one of that brand's legitimate domains (subdomains allowed). Free
+  webmail counts as spoofing even for the brand that owns it (for example "Microsoft" at
+  outlook.com), because anyone can register there. One finding per brand mentioned.
+- `find_brand_mentions(text)` is public and reused by later steps (subject, body). Keywords match
+  as whole words, with flexible separators between the words of a phrase (`office-365` matches
+  `office 365`). The patterns are compiled once per loaded registry, so `data_loader.clear_cache()`
+  also refreshes them. The `organization` section counts as one more brand when it has a name
+  and domains.
