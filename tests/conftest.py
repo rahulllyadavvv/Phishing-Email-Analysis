@@ -37,10 +37,11 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def enrichment_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[list[float]]:
-    """Every test gets its own enrichment cache file, empty caches and rate limiters, and no
-    real waiting: sleeps in ``phishlens.enrichment.base`` return at once and are recorded in the
-    returned list."""
+    """Every test gets its own enrichment cache file and quarantine folder, empty caches and
+    rate limiters, and no real waiting: sleeps in ``phishlens.enrichment.base`` return at once
+    and are recorded in the returned list."""
     monkeypatch.setenv("ENRICHMENT_CACHE_PATH", str(tmp_path / "enrichment_cache.sqlite"))
+    monkeypatch.setenv("QUARANTINE_DIR", str(tmp_path / "quarantine"))
     get_settings.cache_clear()
     enrichment_base.clear_cache()
     enrichment_base.reset_limiters()

@@ -917,3 +917,35 @@ Plan reviewed and approved before building.
 - Test samples: a minimal PE32 (headers plus one section of zeros or random bytes, no code) and
   a minimal LNK (header plus Unicode string data) are built in the tests. QR decoding on fixture
   12 needs zbar and is skipped without it; the QR path is also tested with a mocked decoder.
+
+## P6.6: Sandbox gating and quarantine
+
+- Sandbox choice: CAPE first (normally self-hosted), then Hybrid Analysis, whichever is
+  configured (`_sandbox_client`). Hybrid Analysis still needs `UPLOAD_FILES_TO_HYBRID_ANALYSIS`
+  (P4.5); otherwise its submit returns `not_configured`, which is recorded on the row.
+- Gate, per file, in order. The first reason that applies is recorded as
+  `row["sandbox"] = {"status": "skipped", "reason": ...}`: no sandbox configured, inline image,
+  already known malicious, hash reputation already has a verdict (clean/suspicious), no
+  high-risk type and no medium+ static finding, or the limit of 5 submissions per case
+  (`MAX_SANDBOX_PER_CASE`, protects sandbox quota). "Hash reputation unknown" means the worst
+  status was unknown, error or not_configured, or no lookup was made.
+- Submit, then poll every `SANDBOX_POLL_SECONDS` (15) up to `SANDBOX_MAX_WAIT_SECONDS` (300). Waits
+  go through `base._sleep`, so tests do not really wait. A timeout becomes a report with status
+  `error`, and an entry in `errors`. Files are submitted one at a time (sandbox slots are
+  limited).
+- `sandbox_malicious` (critical) and `sandbox_suspicious` (medium) include the sandbox, score,
+  first 20 signatures and the report link. A clean verdict is only stored on the row
+  (`row["sandbox"]`, the full `SandboxReport`) and never removes static findings. Network
+  domains, IPs, URLs and dropped hashes from finished reports are merged into
+  `raw["sandbox_iocs"]` for IOC extraction (P9).
+- Quarantine (`QUARANTINE_ENABLED`, `QUARANTINE_DIR`): every analyzed file, top-level,
+  extracted or inline, goes into `<dir>/<case>/files.zip`, AES-encrypted with the password
+  `infected`. Entries are named by SHA-256 (CLAUDE.md: generated names, never the attacker's
+  file name), identical files are stored once, and `manifest.json` maps entries to original
+  names, parents, types and hashes. The case key is the email's SHA-256 (or, for a
+  `ParsedEmail` built without raw bytes, a hash of its attachment hashes), or the given
+  `case_id` for file cases. `raw["quarantine_path"]` records the zip. `quarantine/` is gitignored.
+  In tests the folder is a temporary directory (conftest).
+- `analyze_files(files, case_id, passwords=None, reputation=True, sandbox=True)` runs the same
+  stages without an email, for standalone file cases (P10). `analyze` and `analyze_files`
+  share `_run`. `sandbox=False` together with `reputation=False` keeps everything on this host.

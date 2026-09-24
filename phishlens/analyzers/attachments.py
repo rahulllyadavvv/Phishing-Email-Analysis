@@ -1,4 +1,5 @@
-"""Attachment analyzer: unpacking, real file types and filename tricks (static only).
+"""Attachment analyzer: unpacking, identification, reputation, static content analysis,
+sandbox gating and quarantine.
 
 Every attachment is identified by content (``filetype.detect_type``), and archives are unpacked
 in memory (``archives.unpack``) within the ``ARCHIVE_*`` limits shared by the whole email.
@@ -23,17 +24,32 @@ images through ``binaries.analyze_image`` (QR codes). Every file is scanned with
 Inline images (``email.inline_images``) get only the YARA and QR checks: no reputation lookups
 and no filename findings, since mails are full of harmless inline logos.
 
-Nothing is executed, opened or rendered. ``raw["attachments"]`` has one row per file and
-``raw["archive_events"]`` what happened while unpacking. Findings are grouped per ID.
+Sandbox (``sandbox=True``): a file goes to the configured external sandbox (CAPE first, then
+Hybrid Analysis) only when hash reputation had no verdict and the file is high-risk or has a
+medium+ static finding; every other file records why it was skipped. Sandbox verdicts add
+``sandbox_malicious`` / ``sandbox_suspicious``; a clean run never removes static findings.
+Network indicators and dropped hashes are collected in ``raw["sandbox_iocs"]``.
+
+Quarantine: every analyzed file is stored in ``<QUARANTINE_DIR>/<case>/files.zip`` (AES,
+password "infected"), named by SHA-256 with a ``manifest.json``.
+
+``analyze_files(files, case_id)`` runs the same stages for standalone file cases.
+
+Nothing is executed, opened or rendered on this host. ``raw["attachments"]`` has one row per
+file and ``raw["archive_events"]`` what happened while unpacking. Findings are grouped per ID.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import time
+from pathlib import Path
 from typing import Any
 
+import pyzipper
 from bs4 import BeautifulSoup
 
 from phishlens.analyzers.archives import Budget, PasswordCandidate, unpack
@@ -54,7 +70,9 @@ from phishlens.analyzers.filetype import (
 from phishlens.analyzers.office import analyze_office, is_office_type
 from phishlens.config import get_settings
 from phishlens.data_loader import password_hints
+from phishlens.enrichment import base as enrichment_base
 from phishlens.enrichment.lookup import hash_reputation
+from phishlens.enrichment.sandbox import CapeClient, HybridAnalysisClient, SandboxClient
 from phishlens.models import (
     AnalyzerResult,
     Attachment,
@@ -62,6 +80,7 @@ from phishlens.models import (
     EnrichmentStatus,
     Finding,
     ParsedEmail,
+    SandboxReport,
     Severity,
     UrlRef,
     UrlSource,
@@ -69,12 +88,23 @@ from phishlens.models import (
 
 MODULE = "attachments"
 
-__all__ = ["DEFAULT_PASSWORDS", "MODULE", "analyze", "body_passwords", "prepare_files"]
+__all__ = [
+    "DEFAULT_PASSWORDS",
+    "MODULE",
+    "QUARANTINE_PASSWORD",
+    "analyze",
+    "analyze_files",
+    "body_passwords",
+    "prepare_files",
+    "quarantine",
+]
 
 # Tried after the body candidates: the usual password for shared malware samples.
 DEFAULT_PASSWORDS = ("infected",)
 _STRIP = "\"'“”‘’()[]{}<>:;,.!?*`"
 MAX_CONCURRENT_LOOKUPS = 4
+MAX_SANDBOX_PER_CASE = 5
+QUARANTINE_PASSWORD = "infected"
 STATUS_ORDER = ("malicious", "suspicious", "clean", "unknown", "error", "not_configured")
 
 # finding id -> (severity, title, description)
@@ -234,6 +264,16 @@ FINDINGS: dict[str, tuple[Severity, str, str]] = {
         Severity.HIGH,
         "YARA rule matched",
         "A file matches one or more YARA rules.",
+    ),
+    "sandbox_malicious": (
+        Severity.CRITICAL,
+        "Sandbox detonation: malicious",
+        "The file behaved maliciously when run in an external sandbox.",
+    ),
+    "sandbox_suspicious": (
+        Severity.MEDIUM,
+        "Sandbox detonation: suspicious",
+        "The file showed suspicious behaviour when run in an external sandbox.",
     ),
     "encrypted_archive_unopened": (
         Severity.HIGH,
@@ -530,14 +570,212 @@ async def _check_content(
         )
 
 
+# --- Sandbox -------------------------------------------------------------------------------------
+
+_SEVERITY_ORDER = [Severity.INFO, Severity.LOW, Severity.MEDIUM, Severity.HIGH, Severity.CRITICAL]
+_NO_REPUTATION_VERDICT = frozenset({None, "unknown", "error", "not_configured"})
+
+
+def _sandbox_client() -> SandboxClient | None:
+    """The configured sandbox: CAPE (normally self-hosted) first, then Hybrid Analysis."""
+    for client_class in (CapeClient, HybridAnalysisClient):
+        client = client_class()
+        if client.enabled:
+            return client
+    return None
+
+
+def _sandbox_reason(row: dict[str, Any]) -> str | None:
+    """Why this file should NOT go to the sandbox (None means: submit it)."""
+    if row.get("inline"):
+        return "inline image"
+    if row.get("deep_analysis_skipped"):
+        return "already known malicious"
+    if row.get("reputation_verdict") not in _NO_REPUTATION_VERDICT:
+        return f"hash reputation already {row['reputation_verdict']}"
+    risky = any(
+        flag in FINDINGS
+        and _SEVERITY_ORDER.index(FINDINGS[flag][0]) >= _SEVERITY_ORDER.index(Severity.MEDIUM)
+        for flag in row["flags"]
+    )
+    if not risky:
+        return "no high-risk type or medium+ static finding"
+    return None
+
+
+async def _run_sandbox(client: SandboxClient, file: Attachment) -> SandboxReport:
+    submitted = await client.submit(file.data, file.filename)
+    if isinstance(submitted, SandboxReport):
+        return submitted
+    settings = get_settings()
+    waited = 0.0
+    while True:
+        report = await client.get_report(submitted)
+        if report.status != "pending":
+            return report
+        if waited >= settings.sandbox_max_wait_seconds:
+            return report.model_copy(
+                update={
+                    "status": "error",
+                    "error": f"no report after {settings.sandbox_max_wait_seconds:g}s",
+                }
+            )
+        await enrichment_base._sleep(settings.sandbox_poll_seconds)
+        waited += settings.sandbox_poll_seconds
+
+
+async def _check_sandbox(files: list[Attachment], result: AnalyzerResult) -> None:
+    rows = result.raw.get("attachments", [])
+    client = _sandbox_client()
+    candidates: list[tuple[Attachment, dict[str, Any]]] = []
+    for file, row in zip(files, rows, strict=True):
+        reason = "no sandbox configured" if client is None else _sandbox_reason(row)
+        if reason is None and len(candidates) >= MAX_SANDBOX_PER_CASE:
+            reason = f"limit of {MAX_SANDBOX_PER_CASE} sandbox submissions reached"
+        if reason is None:
+            candidates.append((file, row))
+        else:
+            row["sandbox"] = {"status": "skipped", "reason": reason}
+    if client is None or not candidates:
+        return
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    iocs: dict[str, list[str]] = {"domains": [], "ips": [], "urls": [], "dropped_hashes": []}
+    async with client:
+        for file, row in candidates:
+            report = await _run_sandbox(client, file)
+            row["sandbox"] = report.model_dump(mode="json")
+            if report.status != "done":
+                if report.status == "error":
+                    result.errors.append(f"sandbox: {row['safe_name']}: {report.error}")
+                continue
+            for key, values in (
+                ("domains", report.network_domains),
+                ("ips", report.network_ips),
+                ("urls", report.network_urls),
+                ("dropped_hashes", report.dropped_hashes),
+            ):
+                iocs[key] += [v for v in values if v not in iocs[key]]
+            entry = {
+                "file": row["safe_name"],
+                "sha256": file.sha256,
+                "sandbox": report.sandbox,
+                "score": report.score,
+                "signatures": report.signatures[:20],
+                "link": report.link,
+            }
+            if report.verdict == EnrichmentStatus.MALICIOUS:
+                row["flags"].append("sandbox_malicious")
+                grouped.setdefault("sandbox_malicious", []).append(entry)
+            elif report.verdict == EnrichmentStatus.SUSPICIOUS:
+                row["flags"].append("sandbox_suspicious")
+                grouped.setdefault("sandbox_suspicious", []).append(entry)
+            # A clean sandbox run is recorded in the row only; static findings stay.
+    result.raw["sandbox_iocs"] = iocs
+    _add_findings(result, grouped)
+
+
+# --- Quarantine ----------------------------------------------------------------------------------
+
+
+def quarantine(files: list[Attachment], case_key: str) -> str | None:
+    """Store every file in ``<QUARANTINE_DIR>/<case_key>/files.zip`` (AES, password
+    "infected"). Entries are named by SHA-256; ``manifest.json`` maps them to the original
+    names. Returns the zip path, or None when quarantine is disabled."""
+    settings = get_settings()
+    if not settings.quarantine_enabled or not files:
+        return None
+    folder = Path(settings.quarantine_dir) / re.sub(r"[^A-Za-z0-9_-]", "_", case_key)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "files.zip"
+    manifest = []
+    with pyzipper.AESZipFile(
+        path, "w", compression=pyzipper.ZIP_DEFLATED, encryption=pyzipper.WZ_AES
+    ) as archive:
+        archive.setpassword(QUARANTINE_PASSWORD.encode())
+        written: set[str] = set()
+        for file in files:
+            manifest.append(
+                {
+                    "entry": file.sha256,
+                    "filename": file.filename,
+                    "parent": file.parent,
+                    "depth": file.depth,
+                    "detected_type": file.detected_type,
+                    "size": file.size,
+                    "md5": file.md5,
+                    "sha1": file.sha1,
+                    "sha256": file.sha256,
+                }
+            )
+            if file.sha256 not in written:
+                written.add(file.sha256)
+                archive.writestr(file.sha256, file.data)
+        archive.writestr("manifest.json", json.dumps(manifest, indent=2))
+    return str(path)
+
+
+# --- Entry points --------------------------------------------------------------------------------
+
+
+async def _run(
+    result: AnalyzerResult,
+    attachments: list[Attachment],
+    inline_images: list[Attachment],
+    passwords: list[str],
+    case_key: str,
+    reputation: bool,
+    sandbox: bool,
+) -> None:
+    files: list[Attachment] = []
+    try:
+        result.raw["password_candidates"] = passwords
+        files, events = await prepare_files(attachments, passwords)
+        inline = [
+            image.model_copy(
+                update={"detected_type": image.detected_type or detect_type(image.data)}
+            )
+            for image in inline_images
+        ]
+        inline_indexes = set(range(len(files), len(files) + len(inline)))
+        files += inline
+        _static_file_checks(files, events, result, inline_indexes)
+    except Exception as exc:
+        result.errors.append(f"attachments: {type(exc).__name__}: {exc}")
+    stages: list[tuple[str, Any]] = []
+    if reputation:
+        stages.append(("reputation", lambda: _check_reputation(result)))
+    if files:
+        stages.append(("content", lambda: _check_content(files, passwords, result)))
+        if sandbox:
+            stages.append(("sandbox", lambda: _check_sandbox(files, result)))
+    for name, stage in stages:
+        try:
+            await stage()
+        except Exception as exc:
+            result.errors.append(f"{name}: {type(exc).__name__}: {exc}")
+    try:
+        result.raw["quarantine_path"] = await asyncio.to_thread(quarantine, files, case_key)
+    except Exception as exc:
+        result.errors.append(f"quarantine: {type(exc).__name__}: {exc}")
+
+
+def _case_key(email: ParsedEmail) -> str:
+    if email.sha256:
+        return email.sha256
+    digest = hashlib.sha256("".join(a.sha256 for a in email.attachments).encode())
+    return digest.hexdigest()
+
+
 async def analyze(
     email: ParsedEmail,
     context: dict[str, AnalyzerResult] | None = None,
     reputation: bool = True,
+    sandbox: bool = True,
 ) -> AnalyzerResult:
     """Analyze the email's attachments. Never raises; errors go into ``errors``.
 
-    ``reputation=False`` skips the hash lookups (no network at all).
+    ``reputation=False`` skips the hash lookups and ``sandbox=False`` the sandbox (with both
+    off, nothing leaves this host).
     """
     start = time.perf_counter()
     result = AnalyzerResult(module=MODULE)
@@ -545,32 +783,39 @@ async def analyze(
         result.skipped = True
         result.raw["attachments"] = []
         return result
-    files: list[Attachment] = []
-    passwords: list[str] = []
     try:
         passwords = body_passwords(email)
-        result.raw["password_candidates"] = passwords
-        files, events = await prepare_files(list(email.attachments), passwords)
-        inline = [
-            image.model_copy(
-                update={"detected_type": image.detected_type or detect_type(image.data)}
-            )
-            for image in email.inline_images
-        ]
-        inline_indexes = set(range(len(files), len(files) + len(inline)))
-        files += inline
-        _static_file_checks(files, events, result, inline_indexes)
     except Exception as exc:
-        result.errors.append(f"attachments: {type(exc).__name__}: {exc}")
-    if reputation:
-        try:
-            await _check_reputation(result)
-        except Exception as exc:
-            result.errors.append(f"reputation: {type(exc).__name__}: {exc}")
-    if files:
-        try:
-            await _check_content(files, passwords, result)
-        except Exception as exc:
-            result.errors.append(f"content: {type(exc).__name__}: {exc}")
+        passwords = []
+        result.errors.append(f"passwords: {type(exc).__name__}: {exc}")
+    await _run(
+        result,
+        list(email.attachments),
+        list(email.inline_images),
+        passwords,
+        _case_key(email),
+        reputation,
+        sandbox,
+    )
+    result.duration_ms = int((time.perf_counter() - start) * 1000)
+    return result
+
+
+async def analyze_files(
+    files: list[Attachment],
+    case_id: str,
+    passwords: list[str] | None = None,
+    reputation: bool = True,
+    sandbox: bool = True,
+) -> AnalyzerResult:
+    """Analyze standalone files (a file case, no email). Same stages as ``analyze``; the
+    quarantine folder is ``case_id``. Never raises."""
+    start = time.perf_counter()
+    result = AnalyzerResult(module=MODULE)
+    if not files:
+        result.skipped = True
+        result.raw["attachments"] = []
+        return result
+    await _run(result, list(files), [], list(passwords or []), case_id, reputation, sandbox)
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result

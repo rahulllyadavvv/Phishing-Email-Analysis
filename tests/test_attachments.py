@@ -10,7 +10,7 @@ import pytest
 
 from phishlens.analyzers import attachments
 from phishlens.config import get_settings
-from phishlens.models import EnrichmentResult, ParsedEmail, Severity
+from phishlens.models import EnrichmentResult, ParsedEmail, SandboxReport, Severity
 from phishlens.parser import parse_email
 from phishlens.parser.attachments import make_attachment
 
@@ -403,3 +403,196 @@ async def test_fixture_12_inline_image_row(monkeypatch: pytest.MonkeyPatch) -> N
     assert [(u.url, u.source.value) for u in result.extracted_urls] == [
         ("https://qr.example.test/x", "qr_code")
     ]
+
+
+# --- Sandbox gating and quarantine --------------------------------------------------------------
+
+
+class FakeSandbox:
+    """Stand-in sandbox client: pending for ``pending_polls`` polls, then ``verdict``."""
+
+    def __init__(self, verdict: str = "malicious", pending_polls: int = 1) -> None:
+        self.verdict = verdict
+        self.pending_polls = pending_polls
+        self.submitted: list[str] = []
+        self.polls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+    async def submit(self, data: bytes, filename: str) -> str:
+        self.submitted.append(filename)
+        return f"task-{len(self.submitted)}"
+
+    async def get_report(self, task_id: str) -> SandboxReport:
+        self.polls += 1
+        if self.polls <= self.pending_polls:
+            return SandboxReport(sandbox="cape", task_id=task_id, status="pending")
+        return SandboxReport(
+            sandbox="cape",
+            task_id=task_id,
+            verdict=self.verdict,
+            score=90.0,
+            network_domains=["c2.bad.test"],
+            network_ips=["203.0.113.99"],
+            dropped_hashes=["e" * 64],
+            signatures=["Connects to C2"],
+            link="https://cape.lab.test/analysis/1/",
+        )
+
+
+@pytest.fixture
+def sandbox(monkeypatch: pytest.MonkeyPatch):
+    def install(**kwargs) -> FakeSandbox:
+        fake = FakeSandbox(**kwargs)
+        monkeypatch.setattr(attachments, "_sandbox_client", lambda: fake)
+        return fake
+
+    return install
+
+
+def _risky_email() -> ParsedEmail:
+    from tests.test_binaries import make_pe
+
+    return ParsedEmail(
+        attachments=[
+            make_attachment("setup.exe", make_pe()),
+            make_attachment("notes.txt", b"just notes"),
+        ]
+    )
+
+
+async def test_sandbox_runs_for_risky_unknown_file(sandbox, enrichment_env) -> None:
+    fake = sandbox(verdict="malicious", pending_polls=2)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    assert fake.submitted == ["setup.exe"]
+    finding = _ids(result)["sandbox_malicious"]
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["files"][0]["link"] == "https://cape.lab.test/analysis/1/"
+    rows = {r["filename"]: r for r in result.raw["attachments"]}
+    assert rows["setup.exe"]["sandbox"]["verdict"] == "malicious"
+    assert rows["notes.txt"]["sandbox"] == {
+        "status": "skipped",
+        "reason": "no high-risk type or medium+ static finding",
+    }
+    assert result.raw["sandbox_iocs"] == {
+        "domains": ["c2.bad.test"],
+        "ips": ["203.0.113.99"],
+        "urls": [],
+        "dropped_hashes": ["e" * 64],
+    }
+    assert enrichment_env == [15.0, 15.0]  # two polls while pending (sleeps are faked)
+
+
+async def test_suspicious_and_clean_sandbox_results(sandbox) -> None:
+    sandbox(verdict="suspicious", pending_polls=0)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    assert _ids(result)["sandbox_suspicious"].severity == Severity.MEDIUM
+
+    sandbox(verdict="clean", pending_polls=0)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    findings = _ids(result)
+    assert not {"sandbox_malicious", "sandbox_suspicious"} & set(findings)
+    assert "pe_executable_attachment" in findings  # a clean run never removes static findings
+    assert result.raw["attachments"][0]["sandbox"]["verdict"] == "clean"
+
+
+async def test_sandbox_skipped_when_reputation_known(sandbox, monkeypatch) -> None:
+    fake = sandbox()
+
+    async def fake_reputation(sha256: str) -> list[EnrichmentResult]:
+        return [_res("virustotal", "clean")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake_reputation)
+    result = await attachments.analyze(_risky_email())
+    assert fake.submitted == []
+    assert result.raw["attachments"][0]["sandbox"]["reason"] == "hash reputation already clean"
+
+
+async def test_sandbox_skipped_for_known_malicious(sandbox, monkeypatch) -> None:
+    fake = sandbox()
+
+    async def fake_reputation(sha256: str) -> list[EnrichmentResult]:
+        return [_res("abusech", "malicious")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake_reputation)
+    result = await attachments.analyze(_risky_email())
+    assert fake.submitted == []
+    assert result.raw["attachments"][0]["sandbox"]["reason"] == "already known malicious"
+
+
+async def test_no_sandbox_configured() -> None:
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    assert {r["sandbox"]["reason"] for r in result.raw["attachments"]} == {
+        "no sandbox configured"
+    }
+
+
+async def test_sandbox_timeout(sandbox, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SANDBOX_MAX_WAIT_SECONDS", "30")
+    get_settings.cache_clear()
+    sandbox(pending_polls=100)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    row = result.raw["attachments"][0]
+    assert row["sandbox"]["status"] == "error"
+    assert "no report after 30s" in row["sandbox"]["error"]
+    assert any(e.startswith("sandbox: setup.exe") for e in result.errors)
+
+
+async def test_sandbox_submission_limit(sandbox) -> None:
+    from tests.test_binaries import make_pe
+
+    fake = sandbox(pending_polls=0)
+    files = [make_attachment(f"s{i}.exe", make_pe(timestamp=1700000000 + i)) for i in range(7)]
+    result = await attachments.analyze(ParsedEmail(attachments=files), reputation=False)
+    assert len(fake.submitted) == attachments.MAX_SANDBOX_PER_CASE
+    reasons = [r["sandbox"].get("reason") for r in result.raw["attachments"]]
+    assert reasons.count("limit of 5 sandbox submissions reached") == 2
+
+
+def _open_quarantine(path: str) -> tuple[list[str], list[dict]]:
+    import json
+
+    import pyzipper
+
+    with pyzipper.AESZipFile(path) as archive:
+        archive.setpassword(b"infected")
+        manifest = json.loads(archive.read("manifest.json"))
+        return archive.namelist(), manifest
+
+
+async def test_quarantine_zip(tmp_path: Path) -> None:
+    email = _fixture("zip_attachment.eml")
+    result = await attachments.analyze(email, reputation=False)
+    path = Path(result.raw["quarantine_path"])
+    assert path == tmp_path / "quarantine" / email.sha256 / "files.zip"
+    names, manifest = _open_quarantine(str(path))
+    assert [m["filename"] for m in manifest] == ["notes.zip", "notes.txt"]
+    assert sorted(names) == sorted([m["sha256"] for m in manifest] + ["manifest.json"])
+    with pytest.raises(RuntimeError):  # encrypted: unreadable without the password
+        import pyzipper
+
+        pyzipper.AESZipFile(path).read(manifest[0]["sha256"])
+
+
+async def test_quarantine_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUARANTINE_ENABLED", "false")
+    get_settings.cache_clear()
+    result = await attachments.analyze(_fixture("zip_attachment.eml"), reputation=False)
+    assert result.raw["quarantine_path"] is None
+
+
+async def test_analyze_files_standalone(sandbox) -> None:
+    from tests.test_binaries import make_pe
+
+    sandbox(verdict="malicious", pending_polls=0)
+    result = await attachments.analyze_files(
+        [make_attachment("payload.exe", make_pe())], case_id="case-42", reputation=False
+    )
+    assert "sandbox_malicious" in _ids(result)
+    assert result.raw["quarantine_path"].endswith("case-42/files.zip")
+    empty = await attachments.analyze_files([], case_id="case-0")
+    assert empty.skipped

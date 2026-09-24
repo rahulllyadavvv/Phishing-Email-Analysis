@@ -113,6 +113,14 @@ class Settings(BaseSettings):
         "jar", "com", "pif", "cpl", "dll",
     ]
 
+    # Sandbox: how long to wait for a report and how often to poll.
+    sandbox_max_wait_seconds: float = Field(default=300.0, gt=0)
+    sandbox_poll_seconds: float = Field(default=15.0, gt=0)
+
+    # Quarantine: every analyzed file is stored in <dir>/<case>/files.zip (password "infected").
+    quarantine_enabled: bool = True
+    quarantine_dir: str = "quarantine"
+
     # YARA rules folder (every *.yar / *.yara file is compiled); empty means data/yara.
     yara_rules_dir: str | None = None
 
