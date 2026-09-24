@@ -112,11 +112,11 @@ async def test_missing_events_give_no_dates() -> None:
     assert result.status == "ok" and result.registered is None and result.registrar is None
 
 
-@respx.mock(assert_all_called=False)
-async def test_reserved_names_are_never_looked_up() -> None:
+@pytest.mark.respx(assert_all_called=False)
+async def test_reserved_names_are_never_looked_up(respx_mock) -> None:
     for name in ("company.example", "x.test", "example.com", "host.localhost", ""):
         assert (await rdap.lookup_domain(name)).status == "reserved"
-    assert not respx.calls
+    assert not respx_mock.calls
 
 
 @respx.mock

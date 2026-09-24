@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import socket
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
@@ -15,6 +16,23 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from phishlens.config import get_settings
 from phishlens.enrichment import base as enrichment_base
 from phishlens.enrichment import dns as dns_helper
+
+
+class NetworkBlockedError(RuntimeError):
+    """A test tried to open a real network connection."""
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLAUDE.md: all network is mocked in tests. Any real connection attempt fails loudly.
+    respx (HTTP) and ``fake_dns`` (DNS) intercept before a socket is ever opened."""
+
+    def blocked(*args: object, **kwargs: object) -> None:
+        raise NetworkBlockedError(f"real network access in a test: {args[1:]!r}")
+
+    monkeypatch.setattr(socket.socket, "connect", blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", blocked)
+    monkeypatch.setattr(socket, "getaddrinfo", blocked)
 
 
 @pytest.fixture(autouse=True)

@@ -156,11 +156,11 @@ async def test_results_are_cached_per_lookup_type() -> None:
     assert urlhaus.call_count == 1 and threatfox.call_count == 1
 
 
-@respx.mock(assert_all_called=False)
-async def test_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.respx(assert_all_called=False)
+async def test_not_configured(respx_mock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ABUSECH_API_KEY")
     get_settings.cache_clear()
-    route = respx.post(URLHAUS_API).respond(200, json={"query_status": "ok"})
+    route = respx_mock.post(URLHAUS_API).respond(200, json={"query_status": "ok"})
     async with AbuseChClient() as client:
         result = await client.urlhaus_url("http://x.test/")
     assert result.status == EnrichmentStatus.NOT_CONFIGURED

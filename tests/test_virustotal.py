@@ -142,11 +142,11 @@ async def test_bad_key_is_error_without_leaking_it() -> None:
     assert KEY not in result.model_dump_json()
 
 
-@respx.mock(assert_all_called=False)
-async def test_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.respx(assert_all_called=False)
+async def test_not_configured(respx_mock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VIRUSTOTAL_API_KEY")
     get_settings.cache_clear()
-    route = respx.get(url__startswith=API_URL).respond(200, json=_body())
+    route = respx_mock.get(url__startswith=API_URL).respond(200, json=_body())
     async with VirusTotalClient() as vt:
         result = await vt.url("http://x.test/")
         upload = await vt.upload_file(b"data", "a.bin", SHA256)
@@ -155,9 +155,9 @@ async def test_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     assert route.call_count == 0
 
 
-@respx.mock(assert_all_called=False)
-async def test_upload_disabled_by_default_sends_nothing() -> None:
-    route = respx.post(f"{API_URL}/files").respond(200, json={"data": {"id": "x"}})
+@pytest.mark.respx(assert_all_called=False)
+async def test_upload_disabled_by_default_sends_nothing(respx_mock) -> None:
+    route = respx_mock.post(f"{API_URL}/files").respond(200, json={"data": {"id": "x"}})
     async with VirusTotalClient() as vt:
         result = await vt.upload_file(b"MZ fake", "setup.exe", SHA256)
     assert result.status == EnrichmentStatus.NOT_CONFIGURED

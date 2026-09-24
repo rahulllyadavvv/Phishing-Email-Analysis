@@ -607,3 +607,32 @@ Plan reviewed and approved before building.
 - The link for a Safe Browsing result is Google's Transparency Report search page for that URL.
 - `phishlens.__version__` now comes from the installed package metadata (`0.0.0` when run from a
   source tree that is not installed). It is used as the Safe Browsing `clientVersion`.
+
+## P4.4: urlscan.io and AbuseIPDB
+
+- `UrlscanClient.scan(url)`: first a search for a scan of the same URL (`task.url:"<url>" AND
+  date:>now-<URLSCAN_REUSE_DAYS>d`, default 7 days; 0 always submits). If there is none, a
+  submission with `URLSCAN_VISIBILITY` (default `unlisted`; validated as public, unlisted or
+  private). A failed search falls back to submitting. Reusing a scan saves quota and avoids
+  visiting the attacker's page again.
+- Polling: `/result/<uuid>/` returns 404 until the scan is done. The first wait is 10 s (urlscan's
+  guidance), then ×1.5 up to 15 s per wait, for at most `URLSCAN_MAX_WAIT_SECONDS` (90). A timeout
+  is an `error` naming the result page, and is not cached. Waits go through `base._sleep`, so tests
+  never really wait.
+- Result: `malicious` when `verdicts.overall.malicious`, `suspicious` when the overall score is
+  above 0, else `unknown`. Details: uuid, whether a scan was reused, score, categories, brands,
+  final URL, redirect chain (task URL + the main document's redirect hops + final URL,
+  deduplicated), page title, IP, country, screenshot URL and `login_form`. The screenshot and
+  result links may be clickable in reports (CLAUDE.md allows screenshot links).
+- `login_form`: urlscan's result JSON has no reliable flag, so urlscan's stored rendered DOM
+  (`urlscan.io/dom/<uuid>/`) is fetched and searched for `<input type=password>`. This fetches
+  urlscan's copy, never the phishing site. None when the copy is unavailable.
+- `AbuseIpdbClient.ip(ip)`: `/api/v2/check` with `maxAgeInDays=90`. Status: malicious from abuse
+  confidence 75, suspicious from 25, else clean. A whitelisted IP is always clean. Details:
+  score, total reports, ISP, country, usage type, domain, last report. IP reputation is a scored
+  database rather than a blocklist, so a low score is `clean` (unlike URLhaus or Safe Browsing).
+- Test safety: the tests that assert "no network call" used `@respx.mock(assert_all_called=False)`
+  together with module-level `respx.get(...)`. Those routes go to a different router, so those
+  tests passed without really intercepting anything. They now use the `respx_mock` fixture with
+  `@pytest.mark.respx(assert_all_called=False)`. An autouse `no_network` fixture in
+  `tests/conftest.py` also makes any real socket connection or name resolution fail the test.

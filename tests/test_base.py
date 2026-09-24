@@ -50,9 +50,9 @@ async def _lookup(query: str = "Evil.Test") -> EnrichmentResult:
         return await client.lookup(query)
 
 
-@respx.mock(assert_all_called=False)
-async def test_missing_key_is_not_configured_without_network() -> None:
-    route = respx.get(API).respond(200, json={"hits": 1})
+@pytest.mark.respx(assert_all_called=False)
+async def test_missing_key_is_not_configured_without_network(respx_mock) -> None:
+    route = respx_mock.get(API).respond(200, json={"hits": 1})
     result = await _lookup()
     assert result.status == EnrichmentStatus.NOT_CONFIGURED
     assert result.service == "virustotal" and result.query == "evil.test"

@@ -53,6 +53,9 @@ def test_defaults_without_env_file() -> None:
     assert settings.dkim_max_age_days == 7.0
     assert settings.enrichment_timeout_seconds == 15.0
     assert settings.vt_malicious_threshold == 3
+    assert settings.urlscan_visibility == "unlisted"
+    assert settings.urlscan_max_wait_seconds == 90.0
+    assert settings.urlscan_reuse_days == 7
     assert settings.enrichment_max_retries == 3
     assert settings.enrichment_cache is True
     assert settings.cache_ttl("virustotal") == 86400
@@ -162,3 +165,11 @@ def test_secret_values(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("VIRUSTOTAL_API_KEY", "vt-secret")
     monkeypatch.setenv("ABUSEIPDB_API_KEY", "   ")
     assert Settings().secret_values() == ["vt-secret"]
+
+
+def test_urlscan_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("URLSCAN_VISIBILITY", " Private ")
+    assert Settings().urlscan_visibility == "private"
+    monkeypatch.setenv("URLSCAN_VISIBILITY", "secret")
+    with pytest.raises(ValueError):
+        Settings()

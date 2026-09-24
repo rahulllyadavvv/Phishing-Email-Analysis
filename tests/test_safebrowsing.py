@@ -112,11 +112,11 @@ async def test_errors_are_not_cached() -> None:
     assert second.status == EnrichmentStatus.UNKNOWN and not second.cached
 
 
-@respx.mock(assert_all_called=False)
-async def test_not_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.respx(assert_all_called=False)
+async def test_not_configured(respx_mock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GOOGLE_SAFEBROWSING_API_KEY")
     get_settings.cache_clear()
-    route = respx.post(url__startswith=API_URL).respond(200, json={})
+    route = respx_mock.post(url__startswith=API_URL).respond(200, json={})
     async with SafeBrowsingClient() as gsb:
         results = await gsb.urls(["http://a.test/"])
     assert results["http://a.test/"].status == EnrichmentStatus.NOT_CONFIGURED

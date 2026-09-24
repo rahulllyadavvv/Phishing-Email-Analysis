@@ -90,6 +90,12 @@ class Settings(BaseSettings):
     dns_sqlite_cache: bool = True
     dns_cache_path: str = "phishlens_dns_cache.sqlite"
 
+    # urlscan.io: scan visibility (public / unlisted / private), how long to wait for a scan,
+    # and how recent an existing scan of the same URL must be to reuse it instead of submitting.
+    urlscan_visibility: str = "unlisted"
+    urlscan_max_wait_seconds: float = Field(default=90.0, gt=0)
+    urlscan_reuse_days: int = Field(default=7, ge=0)
+
     # Enrichment HTTP clients (phishlens/enrichment/base.py).
     enrichment_timeout_seconds: float = Field(default=15.0, gt=0)
     enrichment_max_retries: int = Field(default=3, ge=0)
@@ -115,6 +121,14 @@ class Settings(BaseSettings):
     def _split_comma_list(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("urlscan_visibility")
+    @classmethod
+    def _check_visibility(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in ("public", "unlisted", "private"):
+            raise ValueError("URLSCAN_VISIBILITY must be public, unlisted or private")
         return value
 
     @field_validator("enrichment_cache_ttl", "enrichment_rate_limits", mode="before")
