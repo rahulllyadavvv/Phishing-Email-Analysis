@@ -38,3 +38,9 @@ skipped when it is missing, and the fallback variants always run. libmagic recog
 formats, so installing it is recommended (`brew install libmagic` / `apt install libmagic1`).
 
 New Python dependencies: `py7zr` (7z), `pycdlib` (ISO images), `pyzipper` (AES-encrypted zips).
+
+## P6.4: QR decoding
+
+`phishlens/analyzers/qr.py` decodes QR codes with pyzbar, which needs the zbar system library
+(`brew install zbar` / `apt install libzbar0`). Without it, QR decoding is skipped and recorded
+(`qr_decoding: unavailable` in the report), and `test_pdf_qr_code_in_image` is skipped.

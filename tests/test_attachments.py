@@ -320,3 +320,31 @@ async def test_office_inside_zip_is_analyzed() -> None:
     )
     entry = _ids(result)["remote_template_injection"].evidence["files"][0]
     assert entry["file"] == "docs/offer.docx"
+
+
+# --- PDF / HTML / SVG content analysis ----------------------------------------------------------
+
+
+async def test_fixture_10_html_smuggling_is_critical() -> None:
+    result = await attachments.analyze(_fixture("html_smuggling.eml"), reputation=False)
+    finding = _ids(result)["html_smuggling"]
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["files"][0]["file"] == "secure_document.html"
+    assert result.raw["attachments"][0]["html"]["scripts"] == 1
+
+
+async def test_pdf_links_become_extracted_urls() -> None:
+    from pypdf import PdfWriter
+    from pypdf.annotations import Link
+
+    writer = PdfWriter()
+    writer.add_blank_page(200, 200)
+    writer.add_annotation(0, Link(rect=(0, 0, 50, 50), url="https://pdf.example.test/pay"))
+    out = io.BytesIO()
+    writer.write(out)
+    email = ParsedEmail(attachments=[make_attachment("invoice.pdf", out.getvalue())])
+    result = await attachments.analyze(email, reputation=False)
+    assert [(u.url, u.source.value) for u in result.extracted_urls] == [
+        ("https://pdf.example.test/pay", "attachment")
+    ]
+    assert result.raw["attachments"][0]["pdf"]["pages"] == 1

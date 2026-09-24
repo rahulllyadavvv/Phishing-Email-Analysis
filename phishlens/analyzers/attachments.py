@@ -14,7 +14,10 @@ sandbox stages leave it alone: the verdict is already certain.
 
 Content analysis (files not skipped above): Office and RTF files go through
 ``office.analyze_office`` (macros, XLM, remote templates, external links, embedded objects,
-encryption). URLs found inside files are returned in ``extracted_urls`` (source "attachment").
+encryption); PDFs through ``documents.analyze_pdf`` (JavaScript, automatic and launch actions,
+embedded files, links, QR codes in images); HTML and SVG through ``documents.analyze_html``
+(HTML smuggling, credential forms, SVG script, obfuscation). URLs found inside files are
+returned in ``extracted_urls`` (source "attachment", or "qr_code" for decoded QR codes).
 
 Nothing is executed, opened or rendered. ``raw["attachments"]`` has one row per file and
 ``raw["archive_events"]`` what happened while unpacking. Findings are grouped per ID.
@@ -30,6 +33,13 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from phishlens.analyzers.archives import Budget, PasswordCandidate, unpack
+from phishlens.analyzers.documents import (
+    ContentReport,
+    analyze_html,
+    analyze_pdf,
+    is_html_type,
+    is_pdf_type,
+)
 from phishlens.analyzers.filetype import BIDI_CONTROLS, detect_type, filename_checks
 from phishlens.analyzers.office import analyze_office, is_office_type
 from phishlens.config import get_settings
@@ -142,6 +152,50 @@ FINDINGS: dict[str, tuple[Severity, str, str]] = {
         Severity.MEDIUM,
         "Password-protected Office document",
         "The document is encrypted, which hides its content from mail filters.",
+    ),
+    "pdf_javascript": (
+        Severity.HIGH,
+        "PDF contains JavaScript",
+        "Legitimate documents rarely need JavaScript; in attachments it is used for exploits "
+        "and redirects.",
+    ),
+    "pdf_auto_action": (
+        Severity.HIGH,
+        "PDF runs an action automatically",
+        "The PDF triggers an action when it is opened or a page is shown (/OpenAction, /AA).",
+    ),
+    "pdf_launch_action": (
+        Severity.CRITICAL,
+        "PDF tries to launch a program",
+        "A /Launch action asks the reader to start a program or open a file.",
+    ),
+    "pdf_embedded_file": (
+        Severity.MEDIUM,
+        "PDF carries embedded files",
+        "Files hidden inside the PDF can be extracted and opened by the reader.",
+    ),
+    "html_smuggling": (
+        Severity.CRITICAL,
+        "HTML smuggling",
+        "The HTML file builds a file in the browser from embedded data and offers it as a "
+        "download, bypassing mail filters that scan attachments.",
+    ),
+    "credential_form_attachment": (
+        Severity.HIGH,
+        "Attachment contains a login form",
+        "A local HTML page with a password field or a form sending data to a website is a "
+        "classic credential-phishing attachment.",
+    ),
+    "svg_script": (
+        Severity.HIGH,
+        "SVG image contains script",
+        "The image carries JavaScript or event handlers, used to redirect or run code when "
+        "it is opened in a browser.",
+    ),
+    "obfuscated_script": (
+        Severity.MEDIUM,
+        "Obfuscated script",
+        "The script hides its behaviour (eval, unescape, long encoded strings).",
     ),
     "encrypted_archive_unopened": (
         Severity.HIGH,
@@ -343,31 +397,52 @@ async def _check_reputation(result: AnalyzerResult) -> None:
         _add_findings(result, {"attachment_known_malicious": malicious})
 
 
+def _content_analysis(
+    file: Attachment, passwords: list[str]
+) -> tuple[str, ContentReport] | None:
+    """Run the static analyzer for the file's type. Returns (section name, report)."""
+    mime = file.detected_type
+    if is_office_type(mime):
+        return "office", analyze_office(file.filename, file.data, mime, passwords)
+    if is_pdf_type(mime):
+        return "pdf", analyze_pdf(file.data)
+    if is_html_type(mime):
+        return "html", analyze_html(file.data, mime)
+    return None
+
+
 async def _check_content(
     files: list[Attachment], passwords: list[str], result: AnalyzerResult
 ) -> None:
-    """Deep static analysis per file type (Office/RTF for now), skipping known-bad files."""
+    """Deep static analysis per file type, skipping files already known to be malicious."""
     rows = result.raw.get("attachments", [])
     grouped: dict[str, list[dict[str, Any]]] = {}
     seen_urls = {ref.url for ref in result.extracted_urls}
+
+    def add_url(url: str, source: UrlSource) -> None:
+        if url not in seen_urls:
+            seen_urls.add(url)
+            result.extracted_urls.append(UrlRef(url=url, source=source))
+
     for file, row in zip(files, rows, strict=True):
-        if row.get("deep_analysis_skipped") or not is_office_type(file.detected_type):
+        if row.get("deep_analysis_skipped"):
             continue
-        report = await asyncio.to_thread(
-            analyze_office, file.filename, file.data, file.detected_type, passwords
-        )
-        row["office"] = report.info
+        analysis = await asyncio.to_thread(_content_analysis, file, passwords)
+        if analysis is None:
+            continue
+        section, report = analysis
+        row[section] = report.info
         for error in report.errors:
-            result.errors.append(f"office: {row['safe_name']}: {error}")
+            result.errors.append(f"{section}: {row['safe_name']}: {error}")
         for flag, details in report.flags:
             row["flags"].append(flag)
             grouped.setdefault(flag, []).append(
                 {"file": row["safe_name"], "sha256": file.sha256, **details}
             )
         for url in report.urls:
-            if url not in seen_urls:
-                seen_urls.add(url)
-                result.extracted_urls.append(UrlRef(url=url, source=UrlSource.ATTACHMENT))
+            add_url(url, UrlSource.ATTACHMENT)
+        for url in report.qr_urls:
+            add_url(url, UrlSource.QR_CODE)
     _add_findings(result, grouped)
 
 

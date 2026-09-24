@@ -70,8 +70,15 @@ _URL_RE = re.compile(rb"https?://[^\s\"'<>\\}{)]+", re.IGNORECASE)
 
 @dataclass
 class OfficeReport:
+    """Result of one content analyzer (also used for PDF/HTML/SVG as ``ContentReport``).
+
+    ``flags`` are ``(finding_id, details)`` pairs, ``urls`` links found in the file and
+    ``qr_urls`` links decoded from QR codes in it.
+    """
+
     flags: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     urls: list[str] = field(default_factory=list)
+    qr_urls: list[str] = field(default_factory=list)
     info: dict[str, Any] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 

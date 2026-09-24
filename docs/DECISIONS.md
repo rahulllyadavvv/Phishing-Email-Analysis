@@ -836,3 +836,44 @@ Plan reviewed and approved before building.
   can call that out. `http(s)` URLs in the RTF text become extracted URLs.
 - oletools loggers are silenced (problems come back in `errors`), and pytest ignores the
   pyparsing deprecation warnings raised inside `oletools.olevba`.
+
+## P6.4: PDF, HTML and SVG static analysis
+
+- `phishlens/analyzers/documents.py`: `analyze_pdf(data)` and `analyze_html(data, mime)` return
+  the same report shape as the Office analyzer (`OfficeReport`, used here as `ContentReport`,
+  now with `qr_urls`). The attachment analyzer picks the analyzer by detected type (Office/RTF,
+  PDF, HTML/SVG), runs it in a worker thread, and skips `deep_analysis_skipped` files. Each file
+  type's info goes in its own row key (`office`, `pdf`, `html`). URLs found go to
+  `extracted_urls` with source `attachment`, and decoded QR codes with source `qr_code`.
+- PDF (pypdf, never rendered): every object reachable from the trailer is visited (at most
+  50,000 nodes; each indirect reference once), so actions hidden in object streams are found
+  too. pypdf decodes obfuscated names such as `/J#61vaScript`.
+  - `pdf_javascript` (high): a `/JS` or `/JavaScript` key, or a JavaScript action.
+  - `pdf_auto_action` (high): an `/OpenAction` that is an action dictionary, or any `/AA`
+    entries (listed as `AA<trigger>:<action>`). An `/OpenAction` that is only a destination
+    (`[page /Fit]`) sets the initial view and is not flagged.
+  - `pdf_launch_action` (critical): a `/Launch` action; `/F` targets are listed.
+  - `pdf_embedded_file` (medium): embedded files, with their names from `reader.attachments`.
+    They are not unpacked as separate files yet.
+  - `/URI` values become extracted URLs. An encrypted PDF is tried with the empty user password;
+    otherwise it is recorded as an error.
+  - QR: images on the first 20 pages (at most 50 images) are decoded with `qr.decode_qr`.
+- `phishlens/analyzers/qr.py` (shared with P6.5): pyzbar + Pillow. Images over 40 megapixels are
+  refused (decompression bombs). Without the zbar library, decoding is skipped and
+  `qr_decoding: unavailable` is recorded.
+- HTML/SVG (BeautifulSoup `html.parser`, never rendered; script text and `on*` event handler
+  attributes are analysed as text):
+  - `html_smuggling` (critical): a Blob plus `createObjectURL` plus a download attribute, a
+    decode step (`atob`, `Uint8Array`, `fromCharCode`) or an encoded payload of at least 200
+    characters; or `msSaveOrOpenBlob`/`msSaveBlob` alone (they save the file themselves). A Blob
+    with no path to a download is not flagged.
+  - `credential_form_attachment` (high): any `<input type=password>`, or a form whose action is
+    an absolute http(s) URL.
+  - `svg_script` (high): an SVG with `<script>`, event handlers or `javascript:`.
+  - `obfuscated_script` (medium): eval, unescape, `Function` constructor, `document.write`, long
+    base64 (200+ characters) or long hex/percent-escape runs.
+  - URLs: `href`, `src`, `action`, `data`, `xlink:href` and `formaction` attributes, meta
+    refresh targets and `location`/`window.open` assignments in script (absolute http(s)/ftp
+    only).
+- Tests build PDFs with pypdf (JavaScript/OpenAction, a page `/AA` Launch action, an embedded
+  file, a link annotation) and use fixture 10. The QR-in-PDF test is skipped without zbar.
