@@ -11,6 +11,11 @@ legitimate domains: homoglyphs and IDN/punycode (via the "skeleton" built from
 ``data/confusables.yaml``), typos (Damerau-Levenshtein on skeletons), combosquatting (a brand
 label plus other words), TLD swaps and a brand used as a subdomain of another domain.
 
+Identity binding (``bind_identity``) ties it together: every brand the message claims to be
+(display name, lookalike domain, subject; later also the body) must match the domain the message
+actually authenticated as. The header analyzer's result is needed for that and comes in through
+the optional ``context`` argument of ``analyze`` (module name -> ``AnalyzerResult``).
+
 ``raw["domain_table"]`` has one row per sender address for the report.
 """
 
@@ -44,13 +49,20 @@ MODULE = "domain"
 __all__ = [
     "MODULE",
     "BrandMention",
+    "ClaimedBrand",
     "LookalikeMatch",
+    "SenderIdentity",
     "analyze",
+    "bind_identity",
     "check_lookalike",
     "decode_idn",
     "find_brand_mentions",
+    "sender_identity",
     "skeleton",
 ]
+
+# Claim sources that on their own are weak (a newsletter may mention a brand in its subject).
+WEAK_CLAIM_SOURCES = frozenset({"subject", "body"})
 
 # Strongest kind first; used to keep one match per brand.
 LOOKALIKE_KINDS = ("homoglyph", "typosquat", "combosquat", "tld_swap", "brand_in_subdomain")
@@ -321,6 +333,133 @@ def _check_lookalikes(email: ParsedEmail, result: AnalyzerResult) -> None:
     result.raw["lookalikes"] = lookalikes
 
 
+@dataclass(frozen=True)
+class ClaimedBrand:
+    """A brand the message claims to be, and where it was claimed (display_name, lookalike,
+    subject, body)."""
+
+    brand: Brand
+    sources: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SenderIdentity:
+    """The domain the message speaks for. ``authenticated`` is True when DMARC aligned, False
+    when it did not, and None when no header analysis was available."""
+
+    domain: str
+    authenticated: bool | None
+
+
+def sender_identity(
+    email: ParsedEmail, context: dict[str, AnalyzerResult] | None = None
+) -> SenderIdentity | None:
+    """Build the sender identity from the From domain and the header analyzer's auth summary."""
+    if not email.from_addrs or not email.from_addrs[0].domain:
+        return None
+    header = (context or {}).get("header")
+    summary = header.raw.get("auth_summary") if header else None
+    dmarc_row = next((r for r in summary or [] if r.get("mechanism") == "dmarc"), None)
+    authenticated = bool(dmarc_row["aligned"]) if dmarc_row else None
+    return SenderIdentity(email.from_addrs[0].domain, authenticated)
+
+
+def bind_identity(
+    claimed_brands: list[ClaimedBrand],
+    identity: SenderIdentity,
+    *,
+    lookalike_domains: frozenset[str] = frozenset(),
+    new_domains: frozenset[str] = frozenset(),
+) -> list[Finding]:
+    """Return a ``brand_impersonation`` finding for every claimed brand the sender is not.
+
+    The sender is the brand when its domain is one of the brand's legitimate domains (not free
+    webmail) and it is not known to be unauthenticated. Severity: high; critical when the sender
+    domain is a lookalike or newly registered; medium when the brand was only claimed in the
+    subject or body.
+    """
+    findings = []
+    domain = identity.domain
+    for claim in claimed_brands:
+        legit = domain_matches(domain, claim.brand.legitimate_domains) is not None
+        if legit and not is_free_webmail(domain) and identity.authenticated is not False:
+            continue
+        is_lookalike = domain in lookalike_domains
+        is_new = domain in new_domains
+        if is_lookalike or is_new:
+            severity = Severity.CRITICAL
+        elif set(claim.sources) <= WEAK_CLAIM_SOURCES:
+            severity = Severity.MEDIUM
+        else:
+            severity = Severity.HIGH
+        if legit and not is_free_webmail(domain):
+            why = f"uses {claim.brand.name}'s domain '{domain}' but did not authenticate as it"
+        else:
+            why = f"comes from '{domain}', which is not a {claim.brand.name} domain"
+        findings.append(
+            _finding(
+                "brand_impersonation",
+                severity,
+                f"Impersonates {claim.brand.name}",
+                f"The message presents itself as {claim.brand.name} "
+                f"({', '.join(claim.sources)}) but {why}.",
+                {
+                    "brand": claim.brand.name,
+                    "claimed_in": list(claim.sources),
+                    "sender_domain": domain,
+                    "authenticated": identity.authenticated,
+                    "lookalike": is_lookalike,
+                    "newly_registered": is_new,
+                    "legitimate_domains": list(claim.brand.legitimate_domains),
+                },
+            )
+        )
+    return findings
+
+
+def _claimed_brands(email: ParsedEmail, result: AnalyzerResult) -> list[ClaimedBrand]:
+    sources: dict[str, tuple[Brand, list[str]]] = {}
+
+    def claim(brand: Brand, source: str) -> None:
+        entry = sources.setdefault(brand.name, (brand, []))
+        if source not in entry[1]:
+            entry[1].append(source)
+
+    for addr in email.from_addrs:
+        for mention in find_brand_mentions(addr.display_name):
+            claim(mention.brand, "display_name")
+    by_name = {b.name: b for b in brand_registry().brands}
+    for matches in result.raw.get("lookalikes", {}).values():
+        for match in matches:
+            if match["brand"] in by_name:
+                claim(by_name[match["brand"]], "lookalike")
+    for mention in find_brand_mentions(email.subject):
+        claim(mention.brand, "subject")
+    return [ClaimedBrand(brand, tuple(where)) for brand, where in sources.values()]
+
+
+def _check_identity(
+    email: ParsedEmail, result: AnalyzerResult, context: dict[str, AnalyzerResult] | None
+) -> None:
+    identity = sender_identity(email, context)
+    claims = _claimed_brands(email, result)
+    result.raw["identity"] = {
+        "sender_domain": identity.domain if identity else None,
+        "authenticated": identity.authenticated if identity else None,
+        "claimed_brands": {c.brand.name: list(c.sources) for c in claims},
+    }
+    if identity is None or not claims:
+        return
+    result.findings.extend(
+        bind_identity(
+            claims,
+            identity,
+            lookalike_domains=frozenset(result.raw.get("lookalikes", {})),
+            new_domains=frozenset(result.raw.get("new_domains", [])),
+        )
+    )
+
+
 def _row(role: str, addr: Address, from_addr: Address | None) -> dict[str, Any]:
     brand = brand_for_domain(addr.domain)
     esp = esp_for_domain(addr.domain)
@@ -449,14 +588,21 @@ def _check_display_name(email: ParsedEmail, result: AnalyzerResult) -> None:
             )
 
 
-async def analyze(email: ParsedEmail) -> AnalyzerResult:
-    """Analyze sender domains. Never raises; errors go into ``AnalyzerResult.errors``."""
+async def analyze(
+    email: ParsedEmail, context: dict[str, AnalyzerResult] | None = None
+) -> AnalyzerResult:
+    """Analyze sender domains. Never raises; errors go into ``AnalyzerResult.errors``.
+
+    ``context`` maps module names to earlier results; the ``header`` result is used for identity
+    binding. Without it, a brand domain's authentication is treated as unknown.
+    """
     start = time.perf_counter()
     result = AnalyzerResult(module=MODULE)
     checks = (
         ("consistency", _check_consistency),
         ("display_name", _check_display_name),
         ("lookalike", _check_lookalikes),
+        ("identity", lambda e, r: _check_identity(e, r, context)),
     )
     for name, check in checks:
         try:

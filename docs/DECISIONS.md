@@ -463,3 +463,28 @@
 - Findings, per unique sender domain (From, Return-Path, Reply-To, Sender, with the roles
   listed): `lookalike_domain` (high; all matches in evidence) and `punycode_domain` (medium, or
   high when the domain is also a lookalike). `raw["lookalikes"]` maps each domain to its matches.
+
+## P3.4: Identity binding
+
+- `analyze(email, context=None)`: `context` maps module names to earlier `AnalyzerResult`s. The
+  pipeline (P10) will pass `{"header": ...}`. The analyzer contract still holds, because
+  `analyze(email)` works on its own.
+- Sender identity (`sender_identity`): the first From domain. `authenticated` is taken from the
+  header analyzer's `auth_summary` DMARC row (`aligned`, i.e. DMARC passed). It is `None` when no
+  header result is available.
+- Claims (`ClaimedBrand`, one per brand, listing its sources): From display names
+  (`find_brand_mentions`), lookalike matches for any sender domain (`raw["lookalikes"]`), and the
+  subject. The tone analyzer will call `bind_identity` with `"body"` claims later.
+- `bind_identity(claimed_brands, identity, *, lookalike_domains, new_domains)`. The sender *is*
+  the brand when its domain is (a subdomain of) a legitimate brand domain, is not free webmail,
+  and is not known to be unauthenticated. Otherwise it produces `brand_impersonation`:
+  - critical when the sender domain is a lookalike or newly registered (`raw["new_domains"]`,
+    filled by P3.5);
+  - medium when the brand was claimed only in the subject or body (weak claims: a newsletter
+    may mention a brand);
+  - high otherwise.
+- Using a brand's real domain without authenticating (fixture 2: From microsoft.com, DMARC not
+  aligned) is impersonation. With unknown authentication (no header context) it is not flagged,
+  to avoid false positives.
+- `raw["identity"]` records the sender domain, whether it authenticated, and the claimed brands
+  with their sources.

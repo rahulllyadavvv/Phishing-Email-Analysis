@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 
 from phishlens import data_loader
-from phishlens.analyzers import domain
+from phishlens.analyzers import domain, header
 from phishlens.analyzers.domain import find_brand_mentions
-from phishlens.models import Severity
+from phishlens.models import AnalyzerResult, Severity
 from phishlens.parser import parse_email
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -177,7 +177,10 @@ async def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(domain, "find_brand_mentions", boom)
     result = await _analyze('From: "PayPal" <x@gmail.com>')
-    assert result.errors == ["display_name: RuntimeError: data exploded"]
+    assert result.errors == [
+        "display_name: RuntimeError: data exploded",
+        "identity: RuntimeError: data exploded",
+    ]
 
 
 @pytest.mark.parametrize("name", ALL_FIXTURES)
@@ -279,3 +282,117 @@ async def test_no_lookalike_for_genuine_sender() -> None:
     result = await _analyze("From: Microsoft <no-reply@accountprotection.microsoft.com>")
     assert result.findings == []
     assert result.raw["lookalikes"] == {}
+
+
+
+# --- Identity binding ----------------------------------------------------------------------------
+
+
+def _header_context(dmarc_aligned: bool) -> dict:
+    summary = [{"mechanism": "dmarc", "result": "pass", "domain": "x", "aligned": dmarc_aligned}]
+    return {"header": AnalyzerResult(module="header", raw={"auth_summary": summary})}
+
+
+def _impersonation(result) -> list:
+    return [f for f in result.findings if f.id == "brand_impersonation"]
+
+
+async def test_fixture_6_brand_impersonation_is_critical() -> None:
+    email = parse_email((FIXTURES / "lookalike_domain.eml").read_bytes())
+    result = await domain.analyze(email, _header_context(dmarc_aligned=True))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["brand"] == "Microsoft"
+    assert set(finding.evidence["claimed_in"]) >= {"display_name", "lookalike"}
+    assert finding.evidence["sender_domain"] == "micros0ft-support.example"
+    assert finding.evidence["authenticated"] is True
+    assert finding.evidence["lookalike"] is True
+    assert result.raw["identity"]["claimed_brands"]["Microsoft"][0] == "display_name"
+
+
+async def test_lookalike_with_fully_passing_auth_is_flagged(fake_dns) -> None:
+    """Real header analysis: SPF and DMARC pass for micros0ft-support.example itself."""
+    fake_dns(
+        {
+            ("micros0ft-support.example", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"],
+            ("_dmarc.micros0ft-support.example", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    email = parse_email((FIXTURES / "lookalike_domain.eml").read_bytes())
+    header_result = await header.analyze(email)
+    assert header_result.raw["dmarc"]["result"] == "pass"
+    result = await domain.analyze(email, {"header": header_result})
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.CRITICAL
+
+
+async def test_genuine_microsoft_mail_is_not_flagged(fake_dns, dkim_key) -> None:
+    fake_dns(
+        {
+            ("sel._domainkey.microsoft.com", "TXT"): [dkim_key.dns_record],
+            ("_dmarc.microsoft.com", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    raw = (
+        b"From: Microsoft account team <no-reply@accountprotection.microsoft.com>\r\n"
+        b"To: user@recipient.test\r\n"
+        b"Subject: Microsoft account security info\r\n"
+        b"\r\n"
+        b"Security info was added to your Microsoft account.\r\n"
+    )
+    email = parse_email(dkim_key.sign(raw, domain="microsoft.com"))
+    header_result = await header.analyze(email)
+    assert header_result.raw["dmarc"]["dmarc_pass"] is True
+    result = await domain.analyze(email, {"header": header_result})
+    assert _impersonation(result) == []
+    assert result.raw["identity"]["authenticated"] is True
+
+
+async def test_spoofed_brand_domain_that_failed_auth_is_flagged() -> None:
+    """Fixture 2: From microsoft.com, but authentication was not aligned."""
+    email = parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes())
+    result = await domain.analyze(email, _header_context(dmarc_aligned=False))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["sender_domain"] == "microsoft.com"
+    assert finding.evidence["authenticated"] is False
+    assert "did not authenticate" in finding.description
+
+
+async def test_brand_domain_without_header_context_is_not_flagged() -> None:
+    email = parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes())
+    result = await domain.analyze(email)
+    assert _impersonation(result) == []
+    assert result.raw["identity"]["authenticated"] is None
+
+
+async def test_subject_only_claim_is_medium() -> None:
+    email = _email("From: News <news@newsletter.example>").model_copy(
+        update={"subject": "Your PayPal account is limited"}
+    )
+    result = await domain.analyze(email, _header_context(dmarc_aligned=True))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["claimed_in"] == ["subject"]
+
+
+async def test_free_webmail_is_never_the_brand() -> None:
+    result = await domain.analyze(
+        _email('From: "Google Security" <alerts@gmail.com>'), _header_context(dmarc_aligned=True)
+    )
+    [finding] = _impersonation(result)
+    assert finding.evidence["brand"] == "Google"
+    assert finding.severity == Severity.HIGH
+
+
+def test_bind_identity_new_domain_is_critical() -> None:
+    brand = domain.brand_registry().brands[0]
+    findings = domain.bind_identity(
+        [domain.ClaimedBrand(brand, ("body",))],
+        domain.SenderIdentity("fresh.test", authenticated=True),
+        new_domains=frozenset({"fresh.test"}),
+    )
+    [finding] = findings
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["newly_registered"] is True
+    assert domain.bind_identity([], domain.SenderIdentity("x.test", None)) == []
