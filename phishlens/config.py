@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "sqlite:///phishlens.sqlite"
 
+    # DNS helper: per-query timeout, cache lifetime, and the optional SQLite cache file.
+    dns_timeout_seconds: float = Field(default=5.0, gt=0)
+    dns_cache_ttl_seconds: int = Field(default=3600, ge=0)
+    dns_sqlite_cache: bool = True
+    dns_cache_path: str = "phishlens_dns_cache.sqlite"
+
     # Trust lists (comma-separated in the environment).
     trusted_authserv_ids: CommaList = []
     trusted_internal_hosts: CommaList = []

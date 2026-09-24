@@ -218,3 +218,35 @@
 - A payload that cannot be transfer-decoded gives an empty attachment and an
   `attachment_decode_error` warning. An unexpected error during the walk is recorded as
   `attachment_extract_error`, and the parts found so far are kept.
+
+## P2.1: DNS helper and trusted Authentication-Results
+
+- `phishlens/enrichment/dns.py`: `resolve(name, rdtype)` plus `txt()`, `mx()` and `a()` helpers.
+  They return a `DnsResult` (`records`, `error`, `cached`) and never raise. Error codes:
+  `nxdomain`, `no_answer`, `timeout`, `no_nameservers`, `unsupported_type`, or
+  `error: <type>: <message>`. Names are lowercased and the trailing dot is removed before lookup
+  and caching.
+- Record formats: TXT character-strings are joined with no separator (as SPF/DMARC expect), MX
+  records are `"<preference> <exchange>"` sorted by preference, A records are dotted IPs.
+- Caching: an in-memory dict, plus a SQLite table (`dns_cache`) in `DNS_CACHE_PATH` when
+  `DNS_SQLITE_CACHE=true`. Both use `DNS_CACHE_TTL_SECONDS`; `0` turns caching off. Only
+  definitive answers are cached (records, `nxdomain`, `no_answer`). Timeouts and other errors are
+  retried next time. A broken or unreadable SQLite file is ignored, so lookups still work. SQLite
+  calls are synchronous. They are small local operations, so they are not moved to a thread.
+- DNS is not rate limited. The per-service rate limiting in P4.1 is for HTTP APIs.
+- Tests replace the private `_query(name, rdtype, timeout)` coroutine with `monkeypatch`.
+- `phishlens/analyzers/header.py` (module name `header`): every `Authentication-Results` value is
+  parsed with `authres` (`parse_value`), and the authserv-id is compared, lowercased, against
+  `TRUSTED_AUTHSERV_IDS`. `raw["auth_results"]` lists every header (`raw`, `authserv_id`,
+  `results`, `trusted`, `parse_error`). `raw["trusted_auth_results"]` has the method results
+  (`method`, `result`, `properties` keyed `"type.name"`, e.g. `smtp.mailfrom`) from trusted
+  headers only. Later SPF/DKIM/DMARC steps should read only these.
+- Empty `TRUSTED_AUTHSERV_IDS`: the forgery check is skipped (missing configuration means
+  skipped, per CLAUDE.md), because otherwise every email would get a
+  `forged_auth_results_header` finding. All headers are then marked untrusted and
+  `raw["trusted_authserv_ids_configured"]` is `False`.
+- An Authentication-Results header that `authres` cannot parse has no authserv-id, so it counts as
+  untrusted. When a trust list is configured it is flagged as `forged_auth_results_header`, with
+  the parse error kept in `raw`. One finding is produced per untrusted header.
+- `Finding.score` is left at 0. Scores come from `weights.yaml` in P10.1 (severity fallback: medium
+  = 15).

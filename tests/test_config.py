@@ -17,6 +17,10 @@ ENV_VARS = [
     "PHISHLENS_API_KEY",
     "REDIS_URL",
     "DATABASE_URL",
+    "DNS_TIMEOUT_SECONDS",
+    "DNS_CACHE_TTL_SECONDS",
+    "DNS_SQLITE_CACHE",
+    "DNS_CACHE_PATH",
     "TRUSTED_AUTHSERV_IDS",
     "TRUSTED_INTERNAL_HOSTS",
     "TRUSTED_ARC_SEALERS",
@@ -42,7 +46,23 @@ def test_defaults_without_env_file() -> None:
     assert settings.redis_url == "redis://localhost:6379/0"
     assert settings.database_url == "sqlite:///phishlens.sqlite"
     assert settings.trusted_authserv_ids == []
+    assert settings.dns_timeout_seconds == 5.0
+    assert settings.dns_cache_ttl_seconds == 3600
+    assert settings.dns_sqlite_cache is True
+    assert settings.dns_cache_path == "phishlens_dns_cache.sqlite"
     assert not any(settings.configured_services().values())
+
+
+def test_dns_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DNS_TIMEOUT_SECONDS", "2.5")
+    monkeypatch.setenv("DNS_CACHE_TTL_SECONDS", "0")
+    monkeypatch.setenv("DNS_SQLITE_CACHE", "false")
+    monkeypatch.setenv("DNS_CACHE_PATH", "cache/dns.sqlite")
+    settings = Settings()
+    assert settings.dns_timeout_seconds == 2.5
+    assert settings.dns_cache_ttl_seconds == 0
+    assert settings.dns_sqlite_cache is False
+    assert settings.dns_cache_path == "cache/dns.sqlite"
 
 
 def test_get_settings_is_cached() -> None:
