@@ -389,3 +389,23 @@
   6. No DMARC record, or effective policy `none` -> `fail_policy_none` / critical (nothing
      stopped delivery; "higher if p=none let it through").
   7. Otherwise `fail` / high.
+
+## P3.1: Reference data
+
+- `phishlens/data_loader.py` (started in P2.5) now loads `brand_registry.yaml`, `free_webmail.yaml`,
+  `risky_tlds.yaml` and `shorteners.yaml`, each validated by a frozen pydantic model and cached.
+  Domain and keyword lists share the `Names` type (lowercased, trailing dot stripped, blanks
+  dropped). A brand must have at least one keyword and one legitimate domain.
+- All domain lookups match the listed domain and its subdomains (`domain_matches`), so the files
+  list registered domains only. `is_risky_tld` checks the last label.
+- Some free webmail domains are also legitimate brand domains (gmail.com for Google;
+  outlook.com, hotmail.com and live.com for Microsoft). They stay in both lists. The domain
+  analyzer must treat a free-webmail sender as unauthenticated for brand purposes: anyone can
+  register `paypal.security@outlook.com`.
+- Indian banks' new `.bank.in` domains (RBI mandate, 2025) are listed next to their older domains.
+- Keywords are matched as whole words or phrases by the analyzers (P3.2+), which lets short
+  keywords like `ups` and `sbi` avoid matching inside other words. Very generic words (for
+  example `meta` or `zoom` alone) are left out, or used only as phrases (`meta platforms`,
+  `zoom meeting`).
+- A test checks that no domain is listed for two brands, and that every data file starts with a
+  comment explaining how to extend it.

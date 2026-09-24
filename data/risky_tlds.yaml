@@ -1,0 +1,37 @@
+# Top-level domains that are cheap or free to register and are heavily used for phishing and
+# malware. Being on this list is a weak signal on its own. Add TLDs lowercase without the dot.
+tlds:
+  - zip
+  - mov
+  - xyz
+  - top
+  - click
+  - link
+  - work
+  - tk
+  - ml
+  - ga
+  - cf
+  - gq
+  - buzz
+  - rest
+  - country
+  - stream
+  - download
+  - loan
+  - men
+  - date
+  - racing
+  - win
+  - review
+  - kim
+  - cam
+  - icu
+  - monster
+  - cyou
+  - sbs
+  - cfd
+  - bond
+  - lol
+  - quest
+  - support

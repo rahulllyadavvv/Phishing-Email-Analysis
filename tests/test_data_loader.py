@@ -60,3 +60,65 @@ def test_invalid_esp_file_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     monkeypatch.setattr(data_loader, "DATA_DIR", tmp_path)
     with pytest.raises(ValidationError):
         data_loader.esps()
+
+
+def test_brand_registry_parses() -> None:
+    registry = data_loader.brand_registry()
+    assert len(registry.brands) >= 30
+    names = {b.name for b in registry.brands}
+    assert {"Microsoft", "PayPal", "State Bank of India", "Income Tax Department"} <= names
+    assert registry.organization.domains == ()
+    for brand in registry.brands:
+        assert brand.keywords and brand.legitimate_domains
+        assert all(k == k.lower() for k in brand.keywords)
+        assert all("." in d and d == d.lower() for d in brand.legitimate_domains)
+
+
+def test_no_domain_belongs_to_two_brands() -> None:
+    seen: dict[str, str] = {}
+    for brand in data_loader.brands():
+        for domain in brand.legitimate_domains:
+            assert domain not in seen, f"{domain} in {seen.get(domain)} and {brand.name}"
+            seen[domain] = brand.name
+
+
+@pytest.mark.parametrize(
+    ("domain", "expected"),
+    [
+        ("accounts.google.com", "Google"),
+        ("PayPal.com.", "PayPal"),
+        ("sbi.co.in", "State Bank of India"),
+        ("paypal-secure.test", None),
+        ("", None),
+    ],
+)
+def test_brand_for_domain(domain: str, expected: str | None) -> None:
+    brand = data_loader.brand_for_domain(domain)
+    assert (brand.name if brand else None) == expected
+
+
+def test_free_webmail_risky_tlds_and_shorteners() -> None:
+    assert data_loader.is_free_webmail("gmail.com")
+    assert data_loader.is_free_webmail("Proton.Me")
+    assert not data_loader.is_free_webmail("company.example")
+    assert data_loader.is_risky_tld("zetatech.xyz")
+    assert data_loader.is_risky_tld("evil.ZIP.")
+    assert not data_loader.is_risky_tld("example.com")
+    assert not data_loader.is_risky_tld("")
+    assert data_loader.is_shortener("bit.ly")
+    assert not data_loader.is_shortener("notbit.ly")
+    assert all("." not in t for t in data_loader.risky_tlds())
+
+
+def test_invalid_brand_file_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "brand_registry.yaml").write_text(
+        "brands:\n  - name: Empty\n    keywords: []\n    legitimate_domains: [x.test]\n"
+    )
+    monkeypatch.setattr(data_loader, "DATA_DIR", tmp_path)
+    with pytest.raises(ValidationError):
+        data_loader.brand_registry()
+
+
+def test_every_data_file_has_an_extension_comment() -> None:
+    for path in data_loader.DATA_DIR.glob("*.yaml"):
+        assert path.read_text().startswith("#"), path.name
