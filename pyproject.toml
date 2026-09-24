@@ -82,7 +82,11 @@ include = ["phishlens*", "api*", "ui*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 # oletools uses pyparsing's old camelCase API; nothing we can fix on our side.
-filterwarnings = ["ignore::DeprecationWarning:oletools.olevba"]
+filterwarnings = [
+    "ignore::DeprecationWarning:oletools.olevba",
+    # Starlette's TestClient uses an anyio alias that anyio deprecated; not our code.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100

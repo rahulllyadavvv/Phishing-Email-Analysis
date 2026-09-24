@@ -112,7 +112,7 @@ async def run_analyzer(
 
 
 async def _analyze_parsed(
-    email: ParsedEmail, progress: _Progress, depth: int
+    email: ParsedEmail, progress: _Progress, depth: int, case_id: str
 ) -> tuple[dict[str, AnalyzerResult], list[IOC]]:
     settings = get_settings()
     timeout = settings.analyzer_timeout_seconds
@@ -143,7 +143,9 @@ async def _analyze_parsed(
     async def run_attachments() -> None:
         results["attachments"] = await run_analyzer(
             "attachments",
-            lambda: attachments.analyze(email, reputation=network, sandbox=network),
+            lambda: attachments.analyze(
+                email, reputation=network, sandbox=network, case_id=case_id
+            ),
             settings.attachment_timeout_seconds,
             progress,
         )
@@ -165,7 +167,7 @@ async def _analyze_parsed(
         described = []
         for index, nested in enumerate(email.nested_emails, start=1):
             nested_results, nested_iocs = await _analyze_parsed(
-                nested, _Progress(None), depth + 1
+                nested, _Progress(None), depth + 1, f"{case_id}_nested{index}"
             )
             label = f"nested:{index}"
             described.append(
@@ -280,7 +282,7 @@ async def analyze_email(
     progress = _Progress(progress_cb)
     with offline(not network):
         email = parse_email(raw_bytes)
-        results, iocs = await _analyze_parsed(email, progress, depth=0)
+        results, iocs = await _analyze_parsed(email, progress, 0, case_id)
         await progress("scoring", "running")
         report = build_report(case_id, CaseType.EMAIL, results, iocs, email=email)
         await progress("scoring", "done")

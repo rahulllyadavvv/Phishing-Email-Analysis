@@ -771,8 +771,11 @@ async def analyze(
     context: dict[str, AnalyzerResult] | None = None,
     reputation: bool = True,
     sandbox: bool = True,
+    case_id: str | None = None,
 ) -> AnalyzerResult:
     """Analyze the email's attachments. Never raises; errors go into ``errors``.
+
+    ``case_id`` names the quarantine folder (default: the email's SHA-256).
 
     ``reputation=False`` skips the hash lookups and ``sandbox=False`` the sandbox (with both
     off, nothing leaves this host).
@@ -793,7 +796,7 @@ async def analyze(
         list(email.attachments),
         list(email.inline_images),
         passwords,
-        _case_key(email),
+        case_id or _case_key(email),
         reputation,
         sandbox,
     )

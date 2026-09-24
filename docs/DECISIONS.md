@@ -1432,3 +1432,37 @@ Plan reviewed and approved before building.
   `healthy()` reports Redis reachability and the number of RQ workers for `/api/health`.
 - `fakeredis` is a new dev dependency to test the Redis store without a server. The worker tests
   run real jobs through `SyncQueue` in the fake internet with a temporary SQLite database.
+
+## P12.3: API endpoints
+
+- `api/main.py` (`create_app()`, module-level `app` for `uvicorn api.main:app`). Tables are
+  created at startup (lifespan).
+- Uploads: read in 1 MB chunks and refused with 413 above `MAX_INPUT_SIZE_MB`; empty uploads
+  get 400. `/api/analyze` checks the content with `load_input`: anything that is not an email
+  (.eml, or Outlook .msg converted) is refused with a message pointing to `/api/analyze-file`.
+  `/api/analyze-file` accepts several files; each becomes its own file case (mode `file`).
+  `/api/analyze-raw` takes `{raw_source}` and refuses text without an RFC 822 header block.
+  All return 202 with the case ID(s).
+- Starting a case: create the row, store the upload under a generated name, record its SHA-256,
+  set progress `job: queued`, then enqueue (RQ), or with `JOB_QUEUE=sync` add a FastAPI
+  background task, so the request returns at once and the job runs in a worker thread.
+- Display file names are sanitized (base name only, printable characters, 200 max); stored
+  files never use them.
+- `GET /cases/{id}` returns the report JSON with every string and every dict key defanged
+  (`_defang_tree`), because the report has domain names as keys (for example lookalike
+  matches). CLAUDE.md: API responses carry no live indicators. It returns 409 while the case is
+  queued/running and 404 when no report exists. Listings defang subject and sender too. The
+  downloadable JSON/CSV/STIX report files keep raw values for analyst tooling (the CSV also has a
+  defanged column). Downloads are always `Content-Disposition: attachment`, so a report is never
+  rendered by the API origin, and only generated report files can be downloaded.
+- `GET /cases`: filters verdict / case_type / date_from / date_to / q, page + page_size (max
+  200), newest first. `GET /stats`: total, counts per verdict (running cases as "pending"),
+  error count, and cases per day for the last 30 days (UTC dates, the same as stored timestamps).
+- `DELETE /cases/{id}`: removes the row, `reports/<id>/`, the stored upload,
+  `quarantine/<id>/` and nested-email quarantine folders (`<id>_nested*`), and the progress
+  entry.
+- `GET /health`: version, queue health (Redis reachable, worker count, or sync),
+  `configured_services()` (true/false only) and the supported report formats.
+- Related fix: the attachment quarantine was keyed by the email's SHA-256, so an API delete could
+  not find it. `attachments.analyze` now takes `case_id`, the pipeline passes it (nested emails
+  use `<case_id>_nested<n>`), and CLI and API cases are quarantined under their own case ID.
