@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from phishlens.analyzers import urls
-from phishlens.models import ParsedEmail, Severity, UrlRef, UrlSource
+from phishlens.models import EnrichmentResult, ParsedEmail, Severity, UrlRef, UrlSource
 from phishlens.parser import parse_email
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -178,3 +178,187 @@ async def test_every_fixture(name: str) -> None:
     assert result.errors == []
     for row in result.raw["urls"]:
         assert "://" not in row["defanged"] or "hxxp" in row["defanged"] or "fxp" in row["defanged"]
+
+
+# --- Reputation (lookup helpers mocked) ----------------------------------------------------------
+
+
+def _res(service: str, status: str, **fields) -> EnrichmentResult:
+    return EnrichmentResult(service=service, query="q", status=status, **fields)
+
+
+class FakeReputation:
+    """Stand-in for ``url_reputation`` and ``urlscan_scan``, answering per URL."""
+
+    def __init__(self, reputation: dict | None = None, scans: dict | None = None) -> None:
+        self.reputation = reputation or {}
+        self.scans = scans or {}
+        self.looked_up: list[str] = []
+        self.scanned: list[str] = []
+
+    async def lookup(self, url: str) -> list[EnrichmentResult]:
+        self.looked_up.append(url)
+        return self.reputation.get(url, [_res("google_safebrowsing", "unknown")])
+
+    async def scan(self, url: str) -> EnrichmentResult:
+        self.scanned.append(url)
+        return self.scans.get(url, _res("urlscan", "not_configured"))
+
+
+@pytest.fixture
+def fake_rep(monkeypatch: pytest.MonkeyPatch):
+    def install(**kwargs) -> FakeReputation:
+        fake = FakeReputation(**kwargs)
+        monkeypatch.setattr(urls, "url_reputation", fake.lookup)
+        monkeypatch.setattr(urls, "urlscan_scan", fake.scan)
+        return fake
+
+    return install
+
+
+BAD = "http://phish.test/login"
+
+
+async def test_mocked_malicious_url_is_critical(fake_rep) -> None:
+    fake = fake_rep(
+        reputation={
+            BAD: [
+                _res("google_safebrowsing", "unknown"),
+                _res("abusech", "malicious", link="https://urlhaus.abuse.ch/url/1/"),
+            ]
+        }
+    )
+    result = await _analyze(_ref(BAD))
+    finding = _ids(result)["url_known_malicious"]
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["urls"] == [
+        {"url": "hxxp://phish[.]test/login", "services": ["abusech"]}
+    ]
+    [row] = result.raw["urls"]
+    assert row["reputation_verdict"] == "malicious"
+    assert [r["service"] for r in row["reputation"]] == ["google_safebrowsing", "abusech"]
+    assert row["reputation"][1]["link"] == "https://urlhaus.abuse.ch/url/1/"
+    assert fake.scanned == []  # a verdict exists: no urlscan submission
+
+
+async def test_suspicious_reputation_is_medium(fake_rep) -> None:
+    fake_rep(reputation={BAD: [_res("virustotal", "suspicious", detections=1)]})
+    finding = _ids(await _analyze(_ref(BAD)))["url_suspicious_reputation"]
+    assert finding.severity == Severity.MEDIUM
+    assert "url_known_malicious" not in _ids(await _analyze(_ref(BAD)))
+
+
+async def test_all_services_not_configured_still_valid() -> None:
+    """Real clients, no API keys: every service says not_configured and nothing is sent."""
+    result = await _analyze(_ref(BAD), _ref("https://bit.ly/x"))
+    assert result.errors == []
+    for row in result.raw["urls"]:
+        assert row["reputation_verdict"] == "not_configured"
+        assert {r["status"] for r in row["reputation"]} == {"not_configured"}
+        assert [r["service"] for r in row["reputation"]] == [
+            "google_safebrowsing",
+            "abusech",
+            "virustotal",
+            "urlscan",
+        ]
+    assert not {"url_known_malicious", "url_suspicious_reputation"} & set(_ids(result))
+
+
+async def test_allowlisted_and_script_urls_skip_reputation(fake_rep) -> None:
+    fake = fake_rep()
+    result = await _analyze(
+        _ref("https://accounts.google.com/"), _ref("javascript:alert(1)"), _ref(BAD)
+    )
+    assert fake.looked_up == [BAD]
+    rows = {r["url"]: r for r in result.raw["urls"]}
+    assert rows["https://accounts.google.com/"]["reputation"] == []
+    assert rows["https://accounts.google.com/"]["reputation_verdict"] is None
+
+
+def _scan(final_url: str, login_form: bool | None, status: str = "unknown") -> EnrichmentResult:
+    return _res(
+        "urlscan",
+        status,
+        details={
+            "final_url": final_url,
+            "screenshot_url": "https://urlscan.io/screenshots/u.png",
+            "login_form": login_form,
+        },
+        link="https://urlscan.io/result/u/",
+    )
+
+
+async def test_urlscan_only_when_no_verdict(fake_rep) -> None:
+    fake = fake_rep(
+        reputation={"http://known.test/": [_res("abusech", "malicious")]},
+        scans={BAD: _scan("https://creds.harvest.test/signin", login_form=True)},
+    )
+    result = await _analyze(_ref(BAD), _ref("http://known.test/"))
+    assert fake.scanned == [BAD]
+    findings = _ids(result)
+    login = findings["urlscan_login_page_on_unrelated_domain"]
+    assert login.severity == Severity.HIGH
+    assert login.evidence["urls"] == [
+        {
+            "url": "hxxp://phish[.]test/login",
+            "final_url": "hxxps://creds[.]harvest[.]test/signin",
+            "screenshot_url": "https://urlscan.io/screenshots/u.png",
+        }
+    ]
+    redirect = findings["redirect_to_different_domain"]
+    assert redirect.severity == Severity.MEDIUM
+    assert redirect.evidence["urls"][0]["final_domain"] == "harvest[.]test"
+    row = {r["url"]: r for r in result.raw["urls"]}[BAD]
+    assert row["final_url"] == "hxxps://creds[.]harvest[.]test/signin"
+    assert row["screenshot_url"] == "https://urlscan.io/screenshots/u.png"
+    assert row["urlscan_link"] == "https://urlscan.io/result/u/"
+    assert row["reputation"][-1]["service"] == "urlscan"
+
+
+async def test_login_page_on_sender_or_brand_domain_is_fine(fake_rep) -> None:
+    fake_rep(
+        scans={
+            "http://go.shop.test/a": _scan("https://login.shop.test/", login_form=True),
+            "http://x.test/b": _scan("https://www.paypal.com/signin", login_form=True),
+        }
+    )
+    email = ParsedEmail(
+        from_addrs=[
+            {"address": "news@shop.test", "domain": "shop.test", "org_domain": "shop.test"}
+        ],
+        urls=[_ref("http://go.shop.test/a"), _ref("http://x.test/b")],
+    )
+    findings = _ids(await urls.analyze(email))
+    assert "urlscan_login_page_on_unrelated_domain" not in findings
+    assert findings["redirect_to_different_domain"].evidence["count"] == 1  # only x.test
+
+
+async def test_urlscan_malicious_verdict_counts(fake_rep) -> None:
+    fake_rep(scans={BAD: _scan(BAD, login_form=False, status="malicious")})
+    result = await _analyze(_ref(BAD))
+    assert _ids(result)["url_known_malicious"].evidence["urls"][0]["services"] == ["urlscan"]
+    assert "redirect_to_different_domain" not in _ids(result)
+
+
+async def test_urlscan_is_capped_per_email(fake_rep) -> None:
+    fake = fake_rep()
+    refs = [_ref(f"http://site{i}.test/") for i in range(8)]
+    await _analyze(*refs)
+    assert len(fake.looked_up) == 8
+    assert len(fake.scanned) == urls.MAX_URLSCAN_PER_EMAIL
+
+
+async def test_static_only_mode_makes_no_lookups(fake_rep) -> None:
+    fake = fake_rep()
+    result = await urls.analyze(ParsedEmail(urls=[_ref(BAD)]), reputation=False)
+    assert fake.looked_up == [] and "reputation" not in result.raw["urls"][0]
+
+
+async def test_reputation_failure_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom(url: str) -> list:
+        raise RuntimeError("lookup exploded")
+
+    monkeypatch.setattr(urls, "url_reputation", boom)
+    result = await _analyze(_ref(BAD))
+    assert result.errors == ["reputation: RuntimeError: lookup exploded"]
+    assert result.raw["urls"][0]["flags"] == ["credential_keywords"]

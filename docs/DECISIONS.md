@@ -702,3 +702,31 @@ Plan reviewed and approved before building.
   in finding descriptions and evidence. Rather than changing each analyzer, the output layer
   (report, API, UI) should defang those fields when rendering. This is noted here so it is not
   forgotten.
+
+## P5.2: URL reputation
+
+- `analyze(..., reputation=True)`: `reputation=False` gives a static-only run with no network at
+  all, for offline use or quick checks.
+- Every unique URL that is not allowlisted, uses http/https/ftp and has a host goes through
+  `lookup.url_reputation`, concurrently (at most 4 at a time). The per-service rate limiters from
+  P4.1 still apply. `data:`/`javascript:` URIs and allowlisted URLs are never sent anywhere.
+- urlscan.io is used only for URLs where no reputation service had a verdict (every result is
+  unknown, error or not_configured), and for at most `MAX_URLSCAN_PER_EMAIL = 5` URLs per email
+  (a mailing with dozens of links would otherwise burn the urlscan quota). urlscan visits the
+  page in its own browser; nothing is ever fetched from this host.
+- Each row in `raw["urls"]` gets `reputation` (per service: status, detections, engines, cached,
+  link, error; the raw query is left out), `reputation_verdict` (the worst status: malicious >
+  suspicious > clean > unknown > error > not_configured; `None` when no lookup was made), and,
+  after urlscan, a defanged `final_url`, `screenshot_url` and `urlscan_link` (report links;
+  CLAUDE.md allows screenshot links to be clickable), plus `login_form`.
+- Findings (grouped per ID like P5.1):
+  - `url_known_malicious` (critical): any service, urlscan included, says malicious. Evidence
+    names the services.
+  - `url_suspicious_reputation` (medium): the worst verdict is suspicious.
+  - `redirect_to_different_domain` (medium): urlscan's final URL is on another registered domain.
+  - `urlscan_login_page_on_unrelated_domain` (high): urlscan found a password field, and the final
+    registered domain is neither the From domain nor any brand's legitimate domain. A login page
+    on the sender's own site or on paypal.com is normal.
+- With no API keys, every URL gets `not_configured` from all four services and the result is still
+  complete and valid (tested with the real clients; the `no_network` guard proves nothing was
+  sent).
