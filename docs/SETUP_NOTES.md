@@ -109,3 +109,9 @@ skipped: ..." and every other format is still written; `test_pdf_is_a_pdf` is sk
   not respond (every `docker` client call hung), so the image was not built here.
   `docker compose config` validates the compose file and `tests/test_deploy.py` checks the
   setup statically; CI (P15.2) builds the image.
+
+## System libraries on the dev Mac
+
+- 2026-09-25: `brew install libmagic zbar pango` installed; the whole suite now runs with no
+  skipped tests (1081 passed). Without them the affected tests are still skipped with a reason,
+  as before.

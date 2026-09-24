@@ -1655,3 +1655,14 @@ Plan reviewed and approved before building.
   `docs/PhishLens_Claude_Code_Prompts.md`).
 - **License: MIT** (`LICENSE`, "PhishLens contributors"), chosen as a permissive default for a
   self-hosted tool. The project owner can swap it before publishing.
+
+## Fix: libmagic versus file signatures
+
+- Found when libmagic, zbar and Pango were installed on the dev Mac and the 14 tests that had
+  always been skipped ran for the first time: 4 failed. libmagic reports truncated or stub files
+  as `text/plain` / `application/octet-stream` (an `MZ` stub, a PNG header without image data)
+  and reports a macro-enabled `.docm` as a plain `.docx`.
+- `detect_type` now keeps libmagic's answer unless it is one of those generic types and a
+  magic-byte signature from `data/file_types.yaml` matches; then the signature wins. ZIP-based
+  files are always opened to look for `vbaProject.bin`, also when libmagic already named an
+  Office Open XML type, so macro documents are not missed.

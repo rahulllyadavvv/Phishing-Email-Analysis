@@ -105,6 +105,10 @@ _OOXML = {
 _WS_PADDED_RE = re.compile(r"[\s -​　]{3,}\.[^.\s]{1,6}$|\.[^.\s]{1,6}[\s​]+$")
 
 
+GENERIC_MIMES = frozenset({"text/plain", "application/octet-stream"})
+_OOXML_MIMES = frozenset(mime for pair in _OOXML.values() for mime in pair)
+
+
 @cache
 def _magic() -> Any:
     try:
@@ -119,12 +123,21 @@ def libmagic_available() -> bool:
     return _magic() is not None
 
 
-def _sniff(data: bytes) -> str:
-    table = file_types()
-    for signature in table.signatures:
+def _signature(data: bytes) -> str | None:
+    """The MIME type of the first magic-byte signature in ``data/file_types.yaml`` that
+    matches, or None."""
+    for signature in file_types().signatures:
         end = signature.offset + len(signature.magic)
         if data[signature.offset : end] == signature.magic:
             return signature.mime
+    return None
+
+
+def _sniff(data: bytes) -> str:
+    table = file_types()
+    mime = _signature(data)
+    if mime:
+        return mime
     head = data[:2048].lower()
     try:
         text = head.decode("utf-8")
@@ -162,9 +175,15 @@ def detect_type(data: bytes) -> str:
             mime = str(checker.from_buffer(data[:65536])).lower()
         except Exception:
             mime = None
+    if mime in GENERIC_MIMES:
+        # libmagic gives up on truncated or stub files (an "MZ" stub, a PNG header with no
+        # image data) that the magic bytes still identify; the signature wins then.
+        mime = _signature(data) or mime
     mime = mime or _sniff(data)
-    if mime in ("application/zip", "application/octet-stream") and data[:2] == b"PK":
-        mime = _refine_zip(data, "application/zip")
+    if data[:2] == b"PK" and (mime in GENERIC_MIMES or mime == "application/zip"
+                              or mime in _OOXML_MIMES):
+        # libmagic reports a .docm as .docx: always look inside for a macro project.
+        mime = _refine_zip(data, "application/zip" if mime in GENERIC_MIMES else mime)
     return mime
 
 
