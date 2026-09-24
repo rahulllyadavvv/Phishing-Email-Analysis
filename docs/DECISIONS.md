@@ -583,3 +583,27 @@ Plan reviewed and approved before building.
   cached.
 - 401/403 and other client errors become `error` (`HTTP <code>`). A 429 goes through the base
   client's retries; a daily quota that is still exhausted ends as `HTTP 429 (after N attempts)`.
+
+## P4.3: abuse.ch and Google Safe Browsing
+
+- Blocklist semantics: URLhaus, MalwareBazaar, ThreatFox and Safe Browsing only know bad things.
+  A hit is `malicious` (ThreatFox: `suspicious` when the highest `confidence_level` is below
+  50). "Not listed" is `unknown`, never `clean`, so the P4.5 lookup order still goes on to
+  VirusTotal for it.
+- `AbuseChClient` (`service="abusech"`): one `ABUSECH_API_KEY` sent as the `Auth-Key` header to
+  all three APIs. `urlhaus_url` (form `url=`), `malwarebazaar_hash` (form
+  `query=get_info&hash=`), `threatfox_ioc` (JSON `search_ioc`). Cache kinds are separate
+  (`urlhaus_url`, `hash`, `threatfox_ioc`), so the same string can be looked up in two feeds.
+  `query_status` values other than ok or not-found (e.g. `unknown_auth_key`, `illegal_hash`)
+  become `error` with that status in the message. Links: URLhaus reference, MalwareBazaar
+  sample page, ThreatFox IOC page.
+- `SafeBrowsingClient` (`service="google_safebrowsing"`): v4 `threatMatches:find` with all four
+  threat types on `ANY_PLATFORM`. The key can only be sent as the `?key=` query parameter; the
+  base client scrubs it from errors and logs (tested).
+- Batching: `BaseClient.batch_lookup` (new, generic) answers cached URLs from the cache,
+  removes duplicates after normalization, and sends the rest in chunks of 500. Each URL's
+  result is cached on its own. A failed chunk marks every URL in it `error` (not cached), and
+  other chunks are unaffected. `url()` is a batch of one.
+- The link for a Safe Browsing result is Google's Transparency Report search page for that URL.
+- `phishlens.__version__` now comes from the installed package metadata (`0.0.0` when run from a
+  source tree that is not installed). It is used as the Safe Browsing `clientVersion`.

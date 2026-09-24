@@ -312,3 +312,54 @@ class BaseClient:
         if result.status not in UNCACHED and ttl > 0:
             _cache_put(self.settings, key, result, now + ttl)
         return result
+
+    async def batch_lookup(
+        self,
+        kind: str,
+        queries: list[str],
+        fetch_many: Callable[[list[str]], Awaitable[dict[str, EnrichmentResult]]],
+        batch_size: int,
+    ) -> dict[str, EnrichmentResult]:
+        """Like ``cached_lookup`` for many queries: cached ones are answered from the cache, the
+        rest are fetched ``batch_size`` at a time with ``fetch_many(normalized_queries)``, which
+        returns a result per query. Keys of the returned dict are the queries as given.
+        Never raises: a failed batch gives every query in it status ``error``.
+        """
+        normalized = {q: self.normalize(kind, q) for q in queries}
+        if not self.enabled:
+            return {
+                q: self.result(n, EnrichmentStatus.NOT_CONFIGURED) for q, n in normalized.items()
+            }
+        now = time.time()
+        found: dict[str, EnrichmentResult] = {}
+        missing: list[str] = []
+        for norm in dict.fromkeys(normalized.values()):
+            cached = _cache_get(self.settings, _cache_key(self.service, kind, norm), now)
+            if cached is not None:
+                found[norm] = cached
+            else:
+                missing.append(norm)
+        ttl = self.settings.cache_ttl(self.service)
+        for start in range(0, len(missing), batch_size):
+            chunk = missing[start : start + batch_size]
+            try:
+                results = await fetch_many(chunk)
+            except Exception as exc:
+                message = str(exc)
+                if not isinstance(exc, EnrichmentError):
+                    message = f"{type(exc).__name__}: {message}"
+                message = redact(message, self.settings)
+                logger.warning("%s %s batch lookup failed: %s", self.service, kind, message)
+                results = {
+                    n: self.result(n, EnrichmentStatus.ERROR, error=message) for n in chunk
+                }
+            for norm in chunk:
+                result = results.get(norm) or self.result(
+                    norm, EnrichmentStatus.ERROR, error="missing from batch response"
+                )
+                found[norm] = result
+                if result.status not in UNCACHED and ttl > 0:
+                    _cache_put(
+                        self.settings, _cache_key(self.service, kind, norm), result, now + ttl
+                    )
+        return {q: found[n] for q, n in normalized.items()}
