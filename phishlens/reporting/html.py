@@ -35,6 +35,13 @@ def render_html(
     summary: list[str] | None = None,
     recommendations: list[str] | None = None,
 ) -> str:
-    """The report as HTML. ``summary`` and ``recommendations`` are sentences to show."""
+    """The report as HTML. ``summary`` / ``recommendations`` default to ``build_summary`` /
+    ``build_recommendations``."""
+    from phishlens.reporting.summary import build_recommendations, build_summary
+
+    if summary is None:
+        summary = build_summary(report)
+    if recommendations is None:
+        recommendations = build_recommendations(report)
     template = _environment().get_template("report.html")
     return template.render(**build_view(report, summary, recommendations))

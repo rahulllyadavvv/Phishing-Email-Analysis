@@ -11,62 +11,16 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-import httpx
 import pytest
 import yaml
 
 from phishlens import pipeline
 from phishlens.analyzers import header, qr
 from phishlens.config import get_settings
-from phishlens.enrichment import abusech, rdap
 from phishlens.models import AnalyzerResult, CaseType
-from phishlens.parser import parse_email
-from phishlens.parser.received import originating_external_ip
 
 FIXTURES = Path(__file__).parent / "fixtures"
 LABELS = yaml.safe_load((FIXTURES / "labels.yaml").read_text())
-EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
-
-
-def _world_dns() -> dict:
-    answers: dict = {
-        ("_dmarc.microsoft.com", "TXT"): ["v=DMARC1; p=reject"],
-        ("_dmarc.paypal.com", "TXT"): ["v=DMARC1; p=reject"],
-    }
-    for path in FIXTURES.glob("*.eml"):
-        emails = [parse_email(path.read_bytes())]
-        emails += emails[0].nested_emails
-        for email in emails:
-            ip = originating_external_ip(email.received_chain)
-            if email.return_path and ip:
-                answers[(email.return_path.domain, "TXT")] = [f"v=spf1 ip4:{ip} -all"]
-            for addr in email.from_addrs:
-                answers[(addr.domain, "MX")] = [f"10 mx.{addr.domain}"]
-    return answers
-
-
-def _malwarebazaar(request: httpx.Request) -> httpx.Response:
-    if EICAR_SHA256 in request.content.decode():
-        return httpx.Response(
-            200,
-            json={
-                "query_status": "ok",
-                "data": [{"sha256_hash": EICAR_SHA256, "signature": "EICAR-Test-File"}],
-            },
-        )
-    return httpx.Response(200, json={"query_status": "hash_not_found"})
-
-
-@pytest.fixture
-def world(fake_dns, respx_mock, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("ABUSECH_API_KEY", "fake-abusech")
-    monkeypatch.setenv("TRUSTED_AUTHSERV_IDS", "mx.recipient.example")
-    get_settings.cache_clear()
-    fake_dns(_world_dns())
-    respx_mock.post(abusech.MALWAREBAZAAR_API).mock(side_effect=_malwarebazaar)
-    respx_mock.post(abusech.URLHAUS_API).respond(200, json={"query_status": "no_results"})
-    respx_mock.get(url__startswith=rdap.RDAP_BOOTSTRAP_URL).respond(404)
-    return respx_mock
 
 
 def _expected(name: str) -> str:

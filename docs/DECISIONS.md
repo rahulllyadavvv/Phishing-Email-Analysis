@@ -1337,3 +1337,33 @@ Plan reviewed and approved before building.
   of a record-lookup temperror. Because of this, offline runs no longer treat the sender as
   "not authenticated": without DNS, a forged `microsoft.com` sender cannot be told apart from a
   real one, and fixture 2 is clean offline. The CLI spoof test now uses mocked DNS.
+
+## P11.2: Executive summary and recommendations
+
+- `phishlens/reporting/summary.py`, no LLM. `build_summary(report)` returns 3-5 sentences: a
+  verdict sentence (label, score, confidence; for Clean also "no significant indicators", and
+  then nothing else), then up to four evidence sentences. Findings are taken in order of points,
+  one sentence per finding ID from the `TEMPLATES` table, filled with the real evidence: brand,
+  the domain that actually authenticated, domain age from RDAP when known, lookalike target and
+  technique, display name vs address, link text vs destination, reputation services, malware
+  families, file names, quoted tone phrases. When fewer than 3 sentences result, a closing
+  sentence points to the details. Every sentence is defanged, so it is safe in the CLI, the API
+  and reports; this also defangs file names that are valid domains (`eicar[.]com`).
+- De-duplication: `auth_but_unaligned` gets no sentence of its own when `brand_impersonation`
+  is present, because the brand sentence already names the authenticated domain ("claims to
+  be from Microsoft, but it was authenticated by zetatech.xyz, not by microsoft.com").
+- `build_recommendations(report)`: nothing for Clean (the report shows "No action needed.").
+  - Suspicious: do not click or open until verified; confirm with the sender through a known
+    channel (emails).
+  - Malicious: block the indicators (with the count) and, for emails, the sender domain;
+    search and remove the message from all mailboxes. When the From domain belongs to a real
+    brand (a forged `microsoft.com`), the sender domain is not to be blocked, and an explicit
+    "do not block <domain> itself" line says why.
+  - By findings: credential reset / session revoke / MFA and forwarding-rule check when there
+    are links and the case is malicious or asks for credentials; isolate the host and run an EDR
+    scan when a risky attachment was found; no payment or bank-detail change for payment
+    requests; report to the impersonated brand(s); report malicious links to Safe Browsing and
+    the host's abuse contact; thank the user who reported it (emails).
+- `render_html` fills both by default, and the CLI summary panel shows the evidence sentences.
+- Tests: fixtures 2, 6 and 14 in the fake internet (the `world` fixture now lives in
+  `tests/conftest.py`) mention the key evidence, and recommendations fit each case.

@@ -155,7 +155,12 @@ def _summary(report: AnalysisReport) -> Panel:
         mitre.add_row("-", "no techniques mapped")
 
     errors = [f"{m}: {e}" for m, r in report.results.items() for e in r.errors]
-    parts: list = [header, reasons, ioc_line, mitre]
+    from phishlens.reporting.summary import build_summary
+
+    summary = Text("\n".join(build_summary(report)[1:]))  # the first sentence repeats the badge
+    parts: list = [header, summary, reasons, ioc_line, mitre] if summary else [
+        header, reasons, ioc_line, mitre
+    ]
     if errors:
         parts.append(Text("Errors:\n" + "\n".join(errors[:10]), style="red"))
     if report.services_not_configured:

@@ -6,16 +6,21 @@ import base64
 import socket
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 
 import dkim
 import dns.resolver
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from phishlens.config import get_settings
+from phishlens.enrichment import abusech, rdap
 from phishlens.enrichment import base as enrichment_base
 from phishlens.enrichment import dns as dns_helper
+from phishlens.parser import parse_email
+from phishlens.parser.received import originating_external_ip
 
 
 class NetworkBlockedError(RuntimeError):
@@ -132,3 +137,55 @@ def dkim_key() -> DkimKey:
     )
     record = f"v=DKIM1; k=rsa; p={base64.b64encode(public_der).decode()}"
     return DkimKey(private_pem, record)
+
+
+# --- A small fake internet for end-to-end tests -------------------------------------------------
+
+FIXTURES = Path(__file__).parent / "fixtures"
+EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+
+
+def _world_dns() -> dict:
+    answers: dict = {
+        ("_dmarc.microsoft.com", "TXT"): ["v=DMARC1; p=reject"],
+        ("_dmarc.paypal.com", "TXT"): ["v=DMARC1; p=reject"],
+    }
+    for path in FIXTURES.glob("*.eml"):
+        emails = [parse_email(path.read_bytes())]
+        emails += emails[0].nested_emails
+        for email in emails:
+            ip = originating_external_ip(email.received_chain)
+            if email.return_path and ip:
+                answers[(email.return_path.domain, "TXT")] = [f"v=spf1 ip4:{ip} -all"]
+            for addr in email.from_addrs:
+                answers[(addr.domain, "MX")] = [f"10 mx.{addr.domain}"]
+    return answers
+
+
+def _malwarebazaar(request: httpx.Request) -> httpx.Response:
+    if EICAR_SHA256 in request.content.decode():
+        return httpx.Response(
+            200,
+            json={
+                "query_status": "ok",
+                "data": [{"sha256_hash": EICAR_SHA256, "signature": "EICAR-Test-File"}],
+            },
+        )
+    return httpx.Response(200, json={"query_status": "hash_not_found"})
+
+
+@pytest.fixture
+def world(fake_dns, respx_mock, monkeypatch: pytest.MonkeyPatch):
+    """DNS: each fixture's envelope domain publishes SPF for its sending IP (as its
+    Authentication-Results header says), microsoft.com and paypal.com DMARC reject, every From
+    domain an MX. HTTP: MalwareBazaar knows EICAR, URLhaus nothing, RDAP answers 404."""
+    monkeypatch.setenv("ABUSECH_API_KEY", "fake-abusech")
+    monkeypatch.setenv("TRUSTED_AUTHSERV_IDS", "mx.recipient.example")
+    get_settings.cache_clear()
+    fake_dns(_world_dns())
+    respx_mock.post(abusech.MALWAREBAZAAR_API).mock(side_effect=_malwarebazaar)
+    respx_mock.post(abusech.URLHAUS_API).respond(200, json={"query_status": "no_results"})
+    respx_mock.get(url__startswith=rdap.RDAP_BOOTSTRAP_URL).respond(404)
+    return respx_mock
+
+

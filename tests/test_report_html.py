@@ -94,8 +94,9 @@ def test_file_case_replaces_email_sections(reports) -> None:
 def test_empty_sections_say_no_findings(reports) -> None:
     text = _text(render_html(reports["clean"]))
     assert "No findings" in text
-    assert "No action needed." in text  # no recommendations given
-    assert "No summary available." in text
+    assert "No action needed." in text  # clean: no recommendations
+    assert "No summary available." in _text(render_html(reports["clean"], summary=[]))
+    assert "rates this email as Clean" in text  # the default summary
 
 
 def test_html_escaping_of_attacker_text() -> None:
