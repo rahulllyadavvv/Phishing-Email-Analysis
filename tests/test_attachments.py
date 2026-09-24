@@ -1,165 +1,152 @@
-"""Tests for phishlens.parser.attachments."""
+"""Tests for phishlens.analyzers.attachments (unpacking, identification, filename tricks)."""
 
 from __future__ import annotations
 
-import base64
-import email
-import hashlib
 import io
 import zipfile
-from email import policy
 from pathlib import Path
 
-from phishlens.parser.attachments import extract_attachments, make_attachment
+import pytest
+
+from phishlens.analyzers import attachments
+from phishlens.config import get_settings
+from phishlens.models import ParsedEmail, Severity
+from phishlens.parser import parse_email
+from phishlens.parser.attachments import make_attachment
 
 FIXTURES = Path(__file__).parent / "fixtures"
-EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+ALL_FIXTURES = sorted(p.name for p in FIXTURES.glob("*.eml"))
 
 
-def _extract(raw: bytes):
-    return extract_attachments(email.message_from_bytes(raw, policy=policy.default))
+def _fixture(name: str) -> ParsedEmail:
+    return parse_email((FIXTURES / name).read_bytes())
 
 
-def _fixture(name: str):
-    return _extract((FIXTURES / name).read_bytes())
+def _ids(result) -> dict:
+    return {f.id: f for f in result.findings}
 
 
-def _mime(body_parts: str, boundary: str = "BOUND") -> bytes:
-    head = (
-        "From: a@example.com\r\nTo: b@example.com\r\nSubject: t\r\nMIME-Version: 1.0\r\n"
-        f'Content-Type: multipart/mixed; boundary="{boundary}"\r\n\r\n'
+def _zip(entries: dict[str, bytes], password: bytes | None = None) -> bytes:
+    import pyzipper
+
+    buf = io.BytesIO()
+    kwargs = {"encryption": pyzipper.WZ_AES} if password else {}
+    with pyzipper.AESZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, **kwargs) as archive:
+        if password:
+            archive.setpassword(password)
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return buf.getvalue()
+
+
+async def test_fixture_9_password_zip_opened_with_4455() -> None:
+    result = await attachments.analyze(_fixture("password_zip.eml"))
+    assert result.errors == []
+    assert result.raw["password_candidates"][0] == "4455"
+    finding = _ids(result)["encrypted_archive_password_in_body"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["files"] == [
+        {"archive": "invoice.zip", "password": "4455", "source": "body"}
+    ]
+    rows = {r["filename"]: r for r in result.raw["attachments"]}
+    assert rows["invoice.txt"]["parent"] == "invoice.zip"
+    assert rows["invoice.txt"]["depth"] == 1
+    assert len(rows["invoice.txt"]["sha256"]) == 64
+
+
+async def test_fixture_8_double_extension() -> None:
+    result = await attachments.analyze(_fixture("double_extension.eml"))
+    finding = _ids(result)["double_extension"]
+    assert finding.severity == Severity.HIGH
+    [entry] = finding.evidence["files"]
+    assert (entry["file"], entry["shown_as"], entry["real"]) == ("invoice.pdf.exe", "pdf", "exe")
+    assert "high_risk_file_type" in _ids(result)
+
+
+async def test_fixture_7_zip_is_unpacked() -> None:
+    result = await attachments.analyze(_fixture("zip_attachment.eml"))
+    rows = result.raw["attachments"]
+    assert [(r["filename"], r["parent"]) for r in rows] == [
+        ("notes.zip", None),
+        ("notes.txt", "notes.zip"),
+    ]
+    assert result.findings == []
+
+
+def test_body_passwords() -> None:
+    email = ParsedEmail(
+        text_body="The password for the file is: 'Xk92!pq'. Use PIN 7781 to open.",
+        html_body="<p>Archive <b>passcode</b>: <code>zz-11</code></p>",
     )
-    return (head + body_parts + f"--{boundary}--\r\n").encode("latin-1")
+    assert attachments.body_passwords(email) == ["Xk92!pq", "7781", "zz-11"]
+    assert attachments.body_passwords(ParsedEmail(text_body="no secrets here")) == []
 
 
-def test_make_attachment_hashes():
-    att = make_attachment("a.bin", b"abc", declared_type="application/octet-stream")
-    assert att.size == 3
-    assert att.md5 == hashlib.md5(b"abc").hexdigest()
-    assert att.sha1 == hashlib.sha1(b"abc").hexdigest()
-    assert att.sha256 == hashlib.sha256(b"abc").hexdigest()
-    assert att.depth == 0 and att.parent is None
-    assert "data" not in att.model_dump()
-
-
-# --- fixture 7: zip attachment ---------------------------------------------------------
-
-
-def test_zip_attachment_extracted_not_unpacked():
-    parts = _fixture("zip_attachment.eml")
-    assert parts.warnings == []
-    assert parts.inline_images == [] and parts.nested == []
-    assert len(parts.attachments) == 1
-    att = parts.attachments[0]
-    assert att.filename == "notes.zip"
-    assert att.declared_type == "application/zip"
-    assert att.detected_type is None
-    assert att.size == len(att.data)
-    assert att.sha256 == hashlib.sha256(att.data).hexdigest()
-    # The zip is kept whole; the bytes are a valid archive (unpacking is Phase 6).
-    assert zipfile.ZipFile(io.BytesIO(att.data)).namelist() == ["notes.txt"]
-
-
-# --- fixture 12: QR code inline image --------------------------------------------------
-
-
-def test_qr_code_inline_image():
-    parts = _fixture("qr_code.eml")
-    assert parts.warnings == []
-    assert parts.attachments == []
-    assert len(parts.inline_images) == 1
-    img = parts.inline_images[0]
-    assert img.filename == "qrcode.png"
-    assert img.declared_type == "image/png"
-    assert img.data.startswith(b"\x89PNG\r\n\x1a\n")
-    assert img.md5 == hashlib.md5(img.data).hexdigest()
-    assert img.sha1 == hashlib.sha1(img.data).hexdigest()
-    assert img.sha256 == hashlib.sha256(img.data).hexdigest()
-
-
-# --- fixture 13: forwarded nested email ------------------------------------------------
-
-
-def test_forwarded_nested_message_returned_as_nested():
-    parts = _fixture("forwarded_nested.eml")
-    assert parts.warnings == []
-    assert parts.attachments == [] and parts.inline_images == []
-    assert len(parts.nested) == 1
-    nested = parts.nested[0]
-    assert nested.declared_type == "message/rfc822"
-    assert nested.filename == "part-1.eml"
-    assert b"From: Microsoft Account Team <account-security@microsoft.com>" in nested.data
-    assert nested.sha256 == hashlib.sha256(nested.data).hexdigest()
-
-
-# --- fixture 14: EICAR attachment ------------------------------------------------------
-
-
-def test_eicar_attachment_hash():
-    parts = _fixture("eicar_attachment.eml")
-    assert parts.warnings == []
-    assert len(parts.attachments) == 1
-    att = parts.attachments[0]
-    assert att.filename == "eicar.com"
-    assert att.declared_type == "application/octet-stream"
-    assert att.size == 68
-    assert att.sha256 == EICAR_SHA256
-
-
-# --- edge cases ------------------------------------------------------------------------
-
-
-def test_bodies_skipped_attached_text_kept():
-    raw = _mime(
-        "--BOUND\r\nContent-Type: text/plain\r\n\r\nbody\r\n"
-        "--BOUND\r\nContent-Type: text/html\r\n\r\n<p>body</p>\r\n"
-        "--BOUND\r\nContent-Type: text/html\r\n"
-        'Content-Disposition: attachment; filename="page.html"\r\n\r\n<p>x</p>\r\n'
+async def test_hidden_executable_inside_encrypted_zip() -> None:
+    inner = _zip({"scan.pdf": b"MZ" + b"\0" * 64}, password=b"Doc2026")
+    email = ParsedEmail(
+        text_body="Documents attached. Password: Doc2026",
+        attachments=[make_attachment("scan.zip", inner)],
     )
-    parts = _extract(raw)
-    assert [a.filename for a in parts.attachments] == ["page.html"]
-    assert parts.attachments[0].declared_type == "text/html"
+    result = await attachments.analyze(email)
+    findings = _ids(result)
+    assert "encrypted_archive_password_in_body" in findings
+    mismatch = findings["type_mismatch"].evidence["files"][0]
+    assert mismatch["file"] == "scan.pdf" and mismatch["actual"] == "executable"
 
 
-def test_filename_from_content_type_name_and_generated():
-    data = base64.b64encode(b"%PDF-1.4 harmless").decode()
-    raw = _mime(
-        '--BOUND\r\nContent-Type: application/pdf; name="doc.pdf"\r\n'
-        f"Content-Transfer-Encoding: base64\r\n\r\n{data}\r\n"
-        "--BOUND\r\nContent-Type: application/octet-stream\r\n"
-        "Content-Disposition: attachment\r\n\r\nxyz\r\n"
+async def test_unopened_encrypted_archive() -> None:
+    email = ParsedEmail(
+        attachments=[make_attachment("locked.zip", _zip({"a.txt": b"x"}, password=b"zzz999"))]
     )
-    parts = _extract(raw)
-    assert [a.filename for a in parts.attachments] == ["doc.pdf", "part-2.bin"]
-    assert parts.attachments[0].data == b"%PDF-1.4 harmless"
+    finding = _ids(await attachments.analyze(email))["encrypted_archive_unopened"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["files"][0]["archive"] == "locked.zip"
 
 
-def test_encoded_filename_decoded():
-    raw = _mime(
-        "--BOUND\r\nContent-Type: application/octet-stream\r\n"
-        "Content-Disposition: attachment; filename*=utf-8''r%C3%A9sum%C3%A9.pdf\r\n\r\nx\r\n"
+async def test_default_password_opens_without_body_finding() -> None:
+    email = ParsedEmail(
+        attachments=[make_attachment("sample.zip", _zip({"a.txt": b"x"}, password=b"infected"))]
     )
-    assert _extract(raw).attachments[0].filename == "résumé.pdf"
+    result = await attachments.analyze(email)
+    assert "encrypted_archive_password_in_body" not in _ids(result)
+    assert "encrypted_archive_unopened" not in _ids(result)
+    assert result.raw["archive_events"][0]["source"] == "default"
 
 
-def test_image_with_attachment_disposition_is_attachment():
-    raw = _mime(
-        "--BOUND\r\nContent-Type: image/png\r\n"
-        'Content-Disposition: attachment; filename="photo.png"\r\n\r\nx\r\n'
-        "--BOUND\r\nContent-Type: image/gif\r\nContent-ID: <logo>\r\n\r\ny\r\n"
-    )
-    parts = _extract(raw)
-    assert [a.filename for a in parts.attachments] == ["photo.png"]
-    assert [a.filename for a in parts.inline_images] == ["part-2.gif"]
+async def test_archive_limit_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARCHIVE_MAX_TOTAL_MB", "1")
+    get_settings.cache_clear()
+    bomb = _zip({"zeros.bin": b"\0" * (3 * 1024 * 1024)})
+    result = await attachments.analyze(ParsedEmail(attachments=[make_attachment("b.zip", bomb)]))
+    finding = _ids(result)["archive_limit_exceeded"]
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["files"][0]["limit"] == "size"
 
 
-def test_bad_structure_never_raises():
-    raw = _mime(
-        "--BOUND\r\nContent-Type: application/octet-stream\r\n"
-        "Content-Transfer-Encoding: base64\r\n"
-        'Content-Disposition: attachment; filename="bad.bin"\r\n\r\n!!!not base64@@\r\n',
-        boundary="OTHER",
-    )
-    parts = _extract(raw)
-    assert isinstance(parts.warnings, list)
-    assert _extract(b"\x00\xff garbage").warnings is not None
+async def test_rtlo_name_is_made_visible() -> None:
+    email = ParsedEmail(attachments=[make_attachment("pay‮fdp.exe", b"MZ" + b"\0" * 40)])
+    result = await attachments.analyze(email)
+    [row] = result.raw["attachments"]
+    assert row["safe_name"] == "pay<U+202E>fdp.exe"
+    assert _ids(result)["rtlo_filename"].evidence["files"][0]["file"] == "pay<U+202E>fdp.exe"
+
+
+async def test_no_attachments_is_skipped() -> None:
+    result = await attachments.analyze(ParsedEmail())
+    assert result.skipped and result.raw["attachments"] == [] and result.findings == []
+
+
+async def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom(*args: object) -> None:
+        raise RuntimeError("unpack exploded")
+
+    monkeypatch.setattr(attachments, "prepare_files", boom)
+    result = await attachments.analyze(_fixture("zip_attachment.eml"))
+    assert result.errors == ["attachments: RuntimeError: unpack exploded"]
+
+
+@pytest.mark.parametrize("name", ALL_FIXTURES)
+async def test_every_fixture(name: str) -> None:
+    result = await attachments.analyze(_fixture(name))
+    assert result.errors == []

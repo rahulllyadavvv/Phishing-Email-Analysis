@@ -1,0 +1,51 @@
+# File identification data used when libmagic is not installed, plus extension knowledge used
+# for filename checks.
+#
+# signatures: magic bytes (hex) at a byte offset -> MIME type. Checked in order; the first match
+#   wins. Add an entry as {mime, offset, hex: "..."} (quote the hex, or YAML reads digits as a number).
+# text_markers: for text files, a MIME type chosen when one of the (lowercase) markers appears in
+#   the first 2 KB. Checked in order.
+# extension_categories: what an extension claims to be. Categories: executable, script, archive,
+#   disk_image, html, shortcut, onenote, office_macro, document, image, text.
+# decoy_extensions: harmless-looking extensions used in front of a real one ("invoice.pdf.exe").
+signatures:
+  - {mime: application/x-dosexec, offset: 0, hex: "4d5a"}
+  - {mime: application/x-executable, offset: 0, hex: "7f454c46"}
+  - {mime: application/x-mach-binary, offset: 0, hex: "cffaedfe"}
+  - {mime: application/java-vm, offset: 0, hex: "cafebabe"}
+  - {mime: application/zip, offset: 0, hex: "504b0304"}
+  - {mime: application/zip, offset: 0, hex: "504b0506"}
+  - {mime: application/x-ole-storage, offset: 0, hex: "d0cf11e0a1b11ae1"}
+  - {mime: application/pdf, offset: 0, hex: "25504446"}
+  - {mime: application/x-rar, offset: 0, hex: "526172211a07"}
+  - {mime: application/x-7z-compressed, offset: 0, hex: "377abcaf271c"}
+  - {mime: application/gzip, offset: 0, hex: "1f8b"}
+  - {mime: application/x-bzip2, offset: 0, hex: "425a68"}
+  - {mime: application/x-xz, offset: 0, hex: "fd377a585a00"}
+  - {mime: application/vnd.ms-cab-compressed, offset: 0, hex: "4d534346"}
+  - {mime: application/x-tar, offset: 257, hex: "7573746172"}
+  - {mime: application/x-iso9660-image, offset: 32769, hex: "4344303031"}
+  - {mime: application/x-ms-shortcut, offset: 0, hex: "4c0000000114020000000000c000000000000046"}
+  - {mime: application/onenote, offset: 0, hex: "e4525c7b8cd8a74d"}
+  - {mime: text/rtf, offset: 0, hex: "7b5c727466"}
+  - {mime: image/png, offset: 0, hex: "89504e470d0a1a0a"}
+  - {mime: image/jpeg, offset: 0, hex: "ffd8ff"}
+  - {mime: image/gif, offset: 0, hex: "47494638"}
+  - {mime: image/bmp, offset: 0, hex: "424d"}
+text_markers:
+  - {mime: image/svg+xml, markers: ["<svg"]}
+  - {mime: text/html, markers: ["<!doctype html", "<html", "<script", "<body", "<iframe"]}
+  - {mime: text/xml, markers: ["<?xml"]}
+extension_categories:
+  executable: [exe, dll, scr, com, pif, cpl, msi, jar, elf, app]
+  script: [js, jse, vbs, vbe, wsf, wsh, hta, ps1, psm1, bat, cmd, sh, py]
+  archive: [zip, 7z, rar, gz, tgz, tar, bz2, xz, cab]
+  disk_image: [iso, img, vhd, vhdx]
+  html: [html, htm, xhtml, shtml, svg, mht, mhtml]
+  shortcut: [lnk, url]
+  onenote: [one]
+  office_macro: [docm, xlsm, pptm, dotm, xltm, xlam, ppam]
+  document: [pdf, doc, docx, xls, xlsx, ppt, pptx, rtf, odt, ods, odp, csv, dot, dotx, xlsb]
+  image: [png, jpg, jpeg, gif, bmp, webp, tif, tiff, ico]
+  text: [txt, log, md, eml, msg, json, xml]
+decoy_extensions: [pdf, doc, docx, xls, xlsx, ppt, pptx, rtf, txt, csv, jpg, jpeg, png, gif, bmp, mp3, mp4, wav, avi, zip]

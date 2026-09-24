@@ -24,6 +24,8 @@ __all__ = [
     "BrandRegistry",
     "Confusables",
     "Esp",
+    "FileTypes",
+    "PasswordHints",
     "Organization",
     "brand_for_domain",
     "brand_registry",
@@ -33,6 +35,7 @@ __all__ = [
     "domain_matches",
     "esp_for_domain",
     "esps",
+    "file_types",
     "free_webmail_domains",
     "is_free_webmail",
     "is_risky_tld",
@@ -40,6 +43,7 @@ __all__ = [
     "is_url_allowlisted",
     "load_yaml",
     "normalize_domain",
+    "password_hints",
     "risky_tlds",
     "shortener_domains",
     "url_allowlist",
@@ -193,8 +197,70 @@ def shortener_domains() -> frozenset[str]:
     return frozenset(_DomainList.model_validate(load_yaml("shorteners.yaml")).domains)
 
 
+class Signature(_Model):
+    mime: str
+    offset: int = 0
+    magic: bytes
+
+    @field_validator("magic", mode="before")
+    @classmethod
+    def _from_hex(cls, value: Any) -> Any:
+        return bytes.fromhex(str(value)) if isinstance(value, str) else value
+
+
+class TextMarker(_Model):
+    mime: str
+    markers: Names
+
+
+class FileTypes(_Model):
+    """File signatures, text markers and extension knowledge (``data/file_types.yaml``)."""
+
+    signatures: tuple[Signature, ...]
+    text_markers: tuple[TextMarker, ...] = ()
+    extension_categories: dict[str, Names]
+    decoy_extensions: Names = ()
+
+    @field_validator("signatures", mode="before")
+    @classmethod
+    def _rename_hex(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [
+                {**{k: v for k, v in item.items() if k != "hex"}, "magic": item["hex"]}
+                if isinstance(item, dict) and "hex" in item
+                else item
+                for item in value
+            ]
+        return value
+
+    def category_of_extension(self, ext: str) -> str | None:
+        ext = ext.lower().lstrip(".")
+        for category, extensions in self.extension_categories.items():
+            if ext in extensions:
+                return category
+        return None
+
+
+class PasswordHints(_Model):
+    """Words introducing a password in an email body (``data/password_hints.yaml``)."""
+
+    max_tokens: int = 6
+    hints: Names
+    stopwords: Names = ()
+
+
 class _UrlKeywords(_Model):
     credential_keywords: Names
+
+
+@cache
+def file_types() -> FileTypes:
+    return FileTypes.model_validate(load_yaml("file_types.yaml"))
+
+
+@cache
+def password_hints() -> PasswordHints:
+    return PasswordHints.model_validate(load_yaml("password_hints.yaml"))
 
 
 @cache
@@ -247,5 +313,6 @@ def is_risky_tld(domain: str | None) -> bool:
 
 def clear_cache() -> None:
     for fn in (load_yaml, esps, brand_registry, free_webmail_domains, risky_tlds,
-               shortener_domains, confusables, url_allowlist, url_credential_keywords):
+               shortener_domains, confusables, url_allowlist, url_credential_keywords,
+               file_types, password_hints):
         fn.cache_clear()

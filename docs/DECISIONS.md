@@ -730,3 +730,55 @@ Plan reviewed and approved before building.
 - With no API keys, every URL gets `not_configured` from all four services and the result is still
   complete and valid (tested with the real clients; the `no_network` guard proves nothing was
   sent).
+
+## P6.1: Archive unpacking, identification and filename tricks
+
+Plan reviewed and approved before building.
+
+- Modules: `analyzers/filetype.py` (type detection, filename checks), `analyzers/archives.py`
+  (unpacking) and `analyzers/attachments.py` (the analyzer, module name `attachments`).
+- Type detection: libmagic when installed, otherwise the signatures and text markers in
+  `data/file_types.yaml` (hex values must be quoted in YAML). Zips are refined to OOXML
+  document types, and to macro-enabled when they contain `vbaProject.bin`. MIME types map to
+  categories (executable, script, archive, disk_image, html (incl. SVG), shortcut, onenote,
+  office_macro, document, image, text).
+- Unpacking happens entirely in memory: nothing is written to disk or executed, so zip-slip
+  paths do not matter. It covers zip (pyzipper: ZipCrypto and AES), 7z (py7zr), tar and
+  tar.gz/bz2/xz (links and devices are never followed), single-file gzip, and ISO (pycdlib,
+  Joliet names when present). RAR, CAB, IMG and VHD are identified but not unpacked (no pure-Python
+  extractor); they are still flagged by type.
+- Limits: one `Budget` per email, shared by all its archives (`ARCHIVE_MAX_DEPTH` 3,
+  `ARCHIVE_MAX_FILES` 100, `ARCHIVE_MAX_TOTAL_MB` 200, `ARCHIVE_FILE_TIMEOUT_SECONDS` 10 per
+  member). Data is decompressed in 64 KB chunks, and every chunk is charged against the budget,
+  so a bomb stops as soon as it crosses the limit. py7zr's own in-memory writer silently
+  truncates, so a custom `WriterFactory` raises instead. For 7z and ISO the declared sizes are
+  also checked up front. Files extracted before a limit is hit are kept. Unpacking runs in
+  `asyncio.to_thread`. A top-level attachment is depth 0; archives at `max_depth` are not
+  opened (a `depth` limit event).
+- Passwords: after each hint word in `data/password_hints.yaml` (text body plus the HTML body's
+  text), the first token that is not a stopword or hint word is a candidate. After those,
+  `infected` (the analyst convention for shared samples) is tried. Once one password opens an
+  archive, it is tried first for the archive's other members. A body password that works gives
+  `encrypted_archive_password_in_body`. `infected` gives no finding (it is recorded in
+  `raw["archive_events"]`). No working password gives `encrypted_archive_unopened`.
+- `type_mismatch` only when the content is a risky category (executable, script, archive, disk
+  image, HTML/SVG, shortcut, OneNote, macro Office file) that differs from what the extension
+  claims (no extension also counts). Generic declared types such as
+  `application/octet-stream` do not cause findings on their own. The declared type is shown in
+  the evidence.
+- `double_extension`: the last extension is high-risk and the one before it is a decoy (from
+  `decoy_extensions`). `rtlo_filename` covers U+202A-202E and U+2066-2069. File names are shown
+  with these characters made visible (`<U+202E>`) in rows and evidence (`safe_name`).
+  `whitespace_padded_extension`: 3 or more (Unicode) spaces before the final extension, or
+  whitespace after it. `high_risk_file_type`: the extension is in `HIGH_RISK_EXTENSIONS`
+  (settings; defaults from the plan plus vbe, wsf, vhdx, com, pif, cpl, dll), or the detected
+  category's typical extension is.
+- Severities: `type_mismatch`, `double_extension`, `rtlo_filename`,
+  `encrypted_archive_password_in_body` and `encrypted_archive_unopened` are high;
+  `whitespace_padded_extension`, `high_risk_file_type` and `archive_limit_exceeded` are medium.
+  Findings are grouped per ID with `evidence.files`, as in the URL analyzer.
+- Output: `raw["attachments"]` has one row per file, top-level first, each followed by its
+  extracted files (filename, safe_name, parent, depth, declared/detected type, size, md5, sha1,
+  sha256, flags). `raw["archive_events"]` and `raw["password_candidates"]` are also recorded. A
+  corrupt archive is an entry in `errors` (`unpack: <name>: ...`). An email without attachments
+  gives `skipped = True`.

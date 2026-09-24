@@ -102,6 +102,17 @@ class Settings(BaseSettings):
     urlscan_max_wait_seconds: float = Field(default=90.0, gt=0)
     urlscan_reuse_days: int = Field(default=7, ge=0)
 
+    # Archive unpacking limits (zip bomb protection) and the file types treated as high risk.
+    archive_max_depth: int = Field(default=3, ge=0)
+    archive_max_files: int = Field(default=100, ge=1)
+    archive_max_total_mb: float = Field(default=200.0, gt=0)
+    archive_file_timeout_seconds: float = Field(default=10.0, gt=0)
+    high_risk_extensions: CommaList = [
+        "exe", "scr", "js", "jse", "vbs", "vbe", "wsf", "hta", "lnk", "iso", "img", "vhd",
+        "vhdx", "one", "html", "htm", "svg", "docm", "xlsm", "pptm", "bat", "cmd", "ps1", "msi",
+        "jar", "com", "pif", "cpl", "dll",
+    ]
+
     # Enrichment HTTP clients (phishlens/enrichment/base.py).
     enrichment_timeout_seconds: float = Field(default=15.0, gt=0)
     enrichment_max_retries: int = Field(default=3, ge=0)
@@ -121,13 +132,22 @@ class Settings(BaseSettings):
     trusted_arc_sealers: CommaList = []
 
     @field_validator(
-        "trusted_authserv_ids", "trusted_internal_hosts", "trusted_arc_sealers", mode="before"
+        "trusted_authserv_ids",
+        "trusted_internal_hosts",
+        "trusted_arc_sealers",
+        "high_risk_extensions",
+        mode="before",
     )
     @classmethod
     def _split_comma_list(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("high_risk_extensions")
+    @classmethod
+    def _strip_dots(cls, value: list[str]) -> list[str]:
+        return [ext.lstrip(".") for ext in value if ext.lstrip(".")]
 
     @field_validator("urlscan_visibility")
     @classmethod

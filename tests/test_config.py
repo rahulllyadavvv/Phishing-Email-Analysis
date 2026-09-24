@@ -53,6 +53,9 @@ def test_defaults_without_env_file() -> None:
     assert settings.dkim_max_age_days == 7.0
     assert settings.enrichment_timeout_seconds == 15.0
     assert settings.vt_malicious_threshold == 3
+    assert (settings.archive_max_depth, settings.archive_max_files) == (3, 100)
+    assert settings.archive_max_total_mb == 200.0
+    assert {"exe", "lnk", "iso", "one", "docm"} <= set(settings.high_risk_extensions)
     assert settings.upload_files_to_hybrid_analysis is False
     assert settings.hybrid_analysis_environment_id == 160
     assert settings.cape_api_token is None
@@ -176,3 +179,8 @@ def test_urlscan_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("URLSCAN_VISIBILITY", "secret")
     with pytest.raises(ValueError):
         Settings()
+
+
+def test_high_risk_extensions_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HIGH_RISK_EXTENSIONS", "EXE, .Js ,lnk")
+    assert Settings().high_risk_extensions == ["exe", "js", "lnk"]

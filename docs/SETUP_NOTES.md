@@ -28,3 +28,13 @@ Submitting a URL to urlscan.io makes urlscan visit it and store the result. `URL
 defaults to `unlisted`: the scan is not on the public feed, but urlscan and its security partners
 can still see it. Phishing links often carry the victim's email address or a session token.
 Use `private` (paid plans) for sensitive mail, or leave `URLSCAN_API_KEY` unset to turn urlscan off.
+
+## P6.1: file type detection
+
+`phishlens/analyzers/filetype.py` uses libmagic (python-magic) when the system library is
+installed, and otherwise falls back to the signature table in `data/file_types.yaml`. Everything
+works without libmagic. The `libmagic` variants of the tests in `tests/test_filetype.py` are
+skipped when it is missing, and the fallback variants always run. libmagic recognizes many more
+formats, so installing it is recommended (`brew install libmagic` / `apt install libmagic1`).
+
+New Python dependencies: `py7zr` (7z), `pycdlib` (ISO images), `pyzipper` (AES-encrypted zips).
