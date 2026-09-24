@@ -51,6 +51,8 @@ def test_analyze_email_end_to_end(client) -> None:
 
     report = client.get(f"/api/cases/{case_id}").json()
     assert report["case_id"] == case_id and report["verdict"]["label"] == "malicious"
+    assert report["summary"][0].startswith("PhishLens rates this email as Malicious")
+    assert any("Microsoft" in r for r in report["recommendations"])
     body = json.dumps(report)
     assert "micros0ft-support.example" not in body  # API responses are defanged
     assert "micros0ft-support[.]example" in body

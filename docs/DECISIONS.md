@@ -1542,3 +1542,25 @@ Plan reviewed and approved before building.
   `ApiError`.
 - AppTest cannot drive file uploads, so the flow is tested end to end through the paste tab
   (input, submit, two polls, switch to the case), and the upload tabs share the same code path.
+
+## P13.3: Case view page
+
+- **Summary and recommendations come from the API.** `GET /api/cases/{id}` adds `summary` and
+  `recommendations`, built with `phishlens.reporting.summary` like the HTML report, so the UI
+  never imports analysis code. If an old report JSON no longer validates, both are empty lists.
+- **Pure helpers in `ui/case_data.py`.** Everything that turns report JSON into rows, trees and
+  groups lives there and is unit-tested; `ui/pages/case_view.py` only lays it out.
+- **Body highlights are re-found, not taken from offsets.** The API defangs `normalized_text` and
+  the highlight phrases, so the analyzer's character offsets no longer line up. Phrases are found
+  again in order (case-insensitive); a phrase that can no longer be found is skipped.
+- **Only two kinds of live links.** MITRE technique links (`https://attack.mitre.org/...`) and
+  urlscan.io screenshots (loaded with `st.image`) are re-fanged, and only after checking the
+  host prefix. Every other value stays defanged. Email and attachment content is never rendered;
+  the Body tab shows the sanitized, escaped text.
+- **Downloads are lazy.** Each download button gets a callable, so a report format is fetched
+  from the API only when its button is clicked. File names are `<case_id>_<verdict>.<ext>`
+  (`.stix.json` for STIX).
+- **File cases** hide the Headers, Sender & domain, Body and Artifacts tabs and say why.
+- **Cases that are not finished** (queued/running) show their status and a Refresh button
+  instead of a partial report. A failed case that still has a verdict shows the report with a
+  warning.

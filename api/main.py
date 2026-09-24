@@ -6,7 +6,8 @@ Endpoints (all under ``/api``):
 - ``POST /analyze-file``: one or more files of any type -> ``[{case_id, filename}]``
 - ``POST /analyze-raw``: JSON ``{raw_source}`` with pasted email source -> ``{case_id}``
 - ``GET /cases/{id}/status``: status and per-module progress
-- ``GET /cases/{id}``: the full AnalysisReport (every string defanged)
+- ``GET /cases/{id}``: the full AnalysisReport plus ``summary`` and ``recommendations``
+  (every string defanged)
 - ``GET /cases/{id}/report?format=html|pdf|json|csv|stix|zip``: file download
 - ``GET /cases``: paginated list with filters (verdict, case_type, date_from, date_to, q)
 - ``GET /stats``: counts per verdict and cases per day (last 30 days)
@@ -40,8 +41,10 @@ from api.security import API_KEY_HEADER, auth_enabled, require_api_key, upload_l
 from phishlens import __version__
 from phishlens.config import get_settings
 from phishlens.ingest.loader import OLE_SIGNATURE, LoaderError, load_input, looks_like_rfc822
+from phishlens.models import AnalysisReport
 from phishlens.reporting.generate import FORMATS
 from phishlens.reporting.safe import defang_text
+from phishlens.reporting.summary import build_recommendations, build_summary
 
 __all__ = ["app", "create_app"]
 
@@ -260,7 +263,14 @@ def create_app() -> FastAPI:
             raise HTTPException(409, f"case {case_id} is still {case.status}")
         if not case.report_json_path or not Path(case.report_json_path).is_file():
             raise HTTPException(404, f"no report for case {case_id}: {case.error_message or ''}")
-        return _defang_tree(json.loads(Path(case.report_json_path).read_text("utf-8")))
+        data = json.loads(Path(case.report_json_path).read_text("utf-8"))
+        try:
+            report = AnalysisReport.model_validate(data)
+            data["summary"] = build_summary(report)
+            data["recommendations"] = build_recommendations(report)
+        except ValueError:
+            data["summary"], data["recommendations"] = [], []
+        return _defang_tree(data)
 
     @app.get("/api/cases/{case_id}/report")
     def download(

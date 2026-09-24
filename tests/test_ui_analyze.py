@@ -84,12 +84,17 @@ def fake_api(monkeypatch: pytest.MonkeyPatch):
         calls["raw"].append((source, force))
         return {"case_id": "PL-20260925-AAAAA", "duplicate": False}
 
+    done = {**_status("done", job="done"), "verdict": "malicious", "score": 90}
+
     def case_status(case_id):
         calls["status"].append(case_id)
-        return next(statuses)
+        return next(statuses, done)  # the case view asks again after the switch
 
     monkeypatch.setattr(api_client, "analyze_raw", analyze_raw)
     monkeypatch.setattr(api_client, "case_status", case_status)
+    monkeypatch.setattr(
+        api_client, "get_case", lambda cid: {"case_id": cid, "verdict": {"label": "malicious"}}
+    )
     monkeypatch.setattr(progress, "_sleep", lambda s: None)
     return calls
 
@@ -110,8 +115,9 @@ def test_paste_flow_polls_then_opens_the_case(fake_api) -> None:
     app.button(key="go_raw").click().run()
     assert not app.exception
     assert fake_api["raw"] == [("From: a@b.test\nSubject: hi\n\nbody", False)]
-    assert fake_api["status"] == ["PL-20260925-AAAAA", "PL-20260925-AAAAA"]
+    assert fake_api["status"][:2] == ["PL-20260925-AAAAA", "PL-20260925-AAAAA"]
     assert app.session_state["case_id"] == "PL-20260925-AAAAA"
+    assert app.title[0].value == "Case view"
 
 
 def test_api_errors_are_shown(monkeypatch: pytest.MonkeyPatch, fake_api) -> None:
