@@ -1120,3 +1120,26 @@ Plan reviewed and approved before building.
   - IPs: unknown (no IP reputation lookup in the pipeline yet).
 - Every IOC has a defanged form (`hxxp`, `[.]`, `[@]`); hashes and file names are unchanged.
   Output is sorted by type (URL, domain, IP, email, SHA-256, SHA-1, MD5, file name), then value.
+
+## P9.2: IOC exporters
+
+- `phishlens/ioc/export.py`: `to_csv` and `to_json` with the columns type, value, defanged,
+  verdict, source, context. Both carry the raw value (for tools that import IOCs) and the
+  defanged one (for people); the report/UI layers show the defanged column.
+- `to_stix_bundle(iocs, report_name, others="observed"|"exclude", timestamp=None)` returns a
+  `stix2.Bundle` (STIX 2.1):
+  - one Identity ("PhishLens", `identity_class: system`) as `created_by_ref` of every object;
+  - an Indicator per malicious or suspicious IOC. Patterns: `domain-name:value`,
+    `ipv4-addr`/`ipv6-addr:value`, `url:value`, `email-addr:value`,
+    `file:hashes.'MD5'|'SHA-1'|'SHA-256'`, `file:name`. Values are escaped for STIX string
+    literals (backslash, quote). `indicator_types` is `malicious-activity` for malicious and
+    `anomalous-activity` for suspicious; `labels` holds the verdict; names use the defanged
+    value;
+  - other IOCs (unknown/clean) as SCOs in one Observed Data object by default, or left out with
+    `others="exclude"`. SCO ids are content-derived, so identical observables merge;
+  - a Report (`threat-report`) referencing the indicators and the observed data. With nothing
+    to reference, the bundle holds only the identity, because a STIX Report must reference at
+    least one object.
+- `timestamp` pins created/modified/valid_from/published for reproducible output (tests).
+- Tests parse the bundle back with `stix2.parse(allow_custom=False)` and check every pattern with
+  the official `stix2patterns` validator, which also checks hash formats.
