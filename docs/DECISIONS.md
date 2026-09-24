@@ -1641,3 +1641,17 @@ Plan reviewed and approved before building.
   test was reaching the network.
 - In CI the libmagic, zbar and WeasyPrint tests run; on the dev Mac they are skipped (see
   SETUP_NOTES).
+
+## P15.3: README and architecture docs
+
+- **README** is written for a new user: pitch, the 7 steps, what is different, a mermaid
+  architecture diagram, Docker quick start, local install, API-key table with sign-up links and
+  free-tier notes (quotas change, so the table says to check each site), how to export emails,
+  UI/CLI/API usage, an evaluation table left as a placeholder until a real dataset is run,
+  safety, limitations, roadmap.
+- **docs/ARCHITECTURE.md** describes what the code does today, with finding IDs taken from the
+  analyzers and scoring numbers from `data/weights.yaml`. Keep both in step when those change.
+- **docs/PROMPTS.md** already holds the full build guide (same content as
+  `docs/PhishLens_Claude_Code_Prompts.md`).
+- **License: MIT** (`LICENSE`, "PhishLens contributors"), chosen as a permissive default for a
+  self-hosted tool. The project owner can swap it before publishing.
