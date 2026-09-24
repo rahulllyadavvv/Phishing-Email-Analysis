@@ -2,7 +2,8 @@
 
 Commands:
 
-- ``phishlens analyze <path> [--format json,csv,stix] [--out reports/] [--no-network]``:
+- ``phishlens analyze <path> [--format html,pdf,json,csv,stix,zip] [--out reports/]
+  [--no-network]``:
   analyzes an email (.eml/.msg) or any other file (routed by content), shows live per-module
   progress and a summary, and writes the requested report formats.
 - ``phishlens analyze-file <path>``: the same, but always treats the input as a standalone file.
@@ -30,9 +31,9 @@ from rich.text import Text
 from phishlens import __version__
 from phishlens.config import get_settings
 from phishlens.ingest.loader import LoaderError, max_input_bytes
-from phishlens.ioc.export import to_csv, to_stix_bundle
 from phishlens.models import AnalysisReport
 from phishlens.pipeline import analyze_file, analyze_input
+from phishlens.reporting.generate import FORMATS, generate_report
 
 app = typer.Typer(
     name="phishlens",
@@ -56,8 +57,7 @@ def _setup(
         force=True,
     )
 
-SUPPORTED_FORMATS = ("json", "csv", "stix")
-LATER_FORMATS = ("html", "pdf")
+SUPPORTED_FORMATS = FORMATS
 LABEL_STYLE = {"clean": "bold green", "suspicious": "bold yellow", "malicious": "bold red"}
 STATUS_STYLE = {
     "pending": "dim",
@@ -92,34 +92,20 @@ def _module_rank(module: str) -> int:
 
 def _parse_formats(value: str) -> list[str]:
     formats = [f.strip().lower() for f in value.split(",") if f.strip()]
-    unknown = [f for f in formats if f not in SUPPORTED_FORMATS + LATER_FORMATS]
+    unknown = [f for f in formats if f not in SUPPORTED_FORMATS]
     if unknown:
         raise typer.BadParameter(
             f"unknown format(s): {', '.join(unknown)} "
-            f"(choose from {', '.join(SUPPORTED_FORMATS + LATER_FORMATS)})"
+            f"(choose from {', '.join(SUPPORTED_FORMATS)})"
         )
     return formats or ["json"]
 
 
 def _write_reports(report: AnalysisReport, formats: list[str], out: Path) -> list[Path]:
-    out.mkdir(parents=True, exist_ok=True)
-    written: list[Path] = []
-    for fmt in formats:
-        if fmt in LATER_FORMATS:
-            console.print(f"[yellow]{fmt.upper()} reports are not available yet; skipped.[/]")
-            continue
-        if fmt == "json":
-            path = out / f"{report.case_id}.json"
-            path.write_text(report.model_dump_json(indent=2), encoding="utf-8")
-        elif fmt == "csv":
-            path = out / f"{report.case_id}.iocs.csv"
-            path.write_text(to_csv(report.iocs), encoding="utf-8")
-        else:
-            path = out / f"{report.case_id}.stix.json"
-            bundle = to_stix_bundle(report.iocs, report_name=f"PhishLens case {report.case_id}")
-            path.write_text(bundle.serialize(pretty=True), encoding="utf-8")
-        written.append(path)
-    return written
+    generated = generate_report(report, formats, out)
+    for fmt, reason in generated.skipped.items():
+        console.print(f"[yellow]{fmt.upper()} skipped: {reason}[/]")
+    return list(generated.paths.values())
 
 
 def _summary(report: AnalysisReport) -> Panel:
@@ -218,7 +204,7 @@ def analyze(
     path: Annotated[Path, typer.Argument(help="Email (.eml/.msg) or any file to analyze")],
     format: Annotated[
         str,
-        typer.Option("--format", "-f", help="Comma-separated: json, csv, stix (html, pdf later)"),
+        typer.Option("--format", "-f", help="Comma-separated: html, pdf, json, csv, stix, zip"),
     ] = "json",
     out: Annotated[Path, typer.Option("--out", "-o", help="Folder for the reports")] = Path(
         "reports"

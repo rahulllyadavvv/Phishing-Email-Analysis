@@ -42,7 +42,7 @@ def test_analyze_spoof_prints_verdict_and_reasons(tmp_path: Path, fake_dns, resp
     assert "SUSPICIOUS" in result.output or "MALICIOUS" in result.output
     assert "Impersonates Microsoft" in result.output or "Display name" in result.output
     assert "Top findings" in result.output and "IOCs:" in result.output
-    [report_file] = tmp_path.glob("*.json")
+    [report_file] = [p for p in tmp_path.glob("*.json") if not p.name.endswith(".stix.json")]
     report = json.loads(report_file.read_text())
     assert report["case_type"] == "email" and report["verdict"]["label"] in (
         "suspicious",
@@ -50,18 +50,23 @@ def test_analyze_spoof_prints_verdict_and_reasons(tmp_path: Path, fake_dns, resp
     )
 
 
-def test_all_formats_and_later_formats(tmp_path: Path) -> None:
+def test_all_formats(tmp_path: Path) -> None:
+    from phishlens.reporting.generate import pdf_available
+
     result = _run(
         "analyze", str(FIXTURES / "link_mismatch.eml"), "--no-network",
-        "--format", "json,csv,stix,html", "--out", str(tmp_path),
+        "--format", "html,pdf,csv,stix", "--out", str(tmp_path),
     )
     assert result.exit_code == 0, result.output
-    assert "HTML reports are not available yet" in result.output
-    names = sorted(p.name.split(".", 1)[1] for p in tmp_path.iterdir())
-    assert names == ["iocs.csv", "json", "stix.json"]
+    names = sorted(p.name.split("_", 1)[1] for p in tmp_path.iterdir())
+    expected = ["malicious.csv", "malicious.html", "malicious.stix.json"]
+    if pdf_available():
+        expected.insert(2, "malicious.pdf")
+    else:
+        assert "PDF skipped" in result.output
+    assert names == expected
     stix = json.loads(next(tmp_path.glob("*.stix.json")).read_text())
     assert stix["type"] == "bundle"
-    assert "hxxp://paypal-secure-login[.]example" in result.output or "MALICIOUS" in result.output
 
 
 def test_output_is_defanged(tmp_path: Path) -> None:

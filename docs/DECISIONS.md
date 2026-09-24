@@ -1367,3 +1367,23 @@ Plan reviewed and approved before building.
 - `render_html` fills both by default, and the CLI summary panel shows the evidence sentences.
 - Tests: fixtures 2, 6 and 14 in the fake internet (the `world` fixture now lives in
   `tests/conftest.py`) mention the key evidence, and recommendations fit each case.
+
+## P11.3: PDF and export bundle
+
+- `phishlens/reporting/generate.py`: `generate_report(report, formats, out_dir) ->
+  GeneratedReports` with `paths` (format -> file) and `skipped` (format -> reason). This is a
+  small change from the plan's plain dict, so a format that cannot be produced on this machine
+  (PDF without WeasyPrint's Pango libraries) is reported instead of failing the whole export.
+  Unknown formats raise `ValueError`.
+- Formats: html, pdf, json (full AnalysisReport), csv (IOCs), stix (STIX 2.1 bundle), zip (all
+  the others that could be produced). Names: `<case_id>_<verdict>.<ext>`, with extensions
+  `.html .pdf .json .csv .stix.json .zip`. The HTML is rendered once and reused for the PDF.
+- The PDF comes from WeasyPrint on the same HTML. Page numbers and repeated table headers come
+  from the template's print CSS (`@page` counters, `thead { display: table-header-group }`).
+  WeasyPrint gets a URL fetcher that refuses every URL, so rendering a report never contacts the
+  network (defense in depth; the template has no external resources).
+- The CLI `--format` now accepts html, pdf, json, csv, stix and zip through `generate_report`,
+  and prints a yellow "PDF skipped: ..." line when the PDF is not possible.
+- On the dev machine Pango is missing, so the PDF test is skipped; the "unavailable" path and the
+  no-fetch URL fetcher are tested with fakes. `test_html_has_no_live_links_except_allowed` checks
+  that the report has no http(s) link or URL other than attack.mitre.org / urlscan.io.

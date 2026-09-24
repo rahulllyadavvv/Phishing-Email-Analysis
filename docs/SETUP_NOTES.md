@@ -69,3 +69,10 @@ the file takes a few seconds; it is cached per process.
 `tests/test_pipeline.py` runs every fixture through the whole pipeline against a fake internet
 (fake DNS, respx for HTTP). `qr_code.eml` only reaches its expected "suspicious" verdict when
 the QR code can be decoded, so that case is skipped without zbar.
+
+## P11.3: PDF reports
+
+PDF reports are rendered by WeasyPrint, which needs Pango (`brew install pango` on macOS; on
+Apple Silicon also `export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`; `apt install
+libpango-1.0-0 libpangoft2-1.0-0` on Debian/Ubuntu). Without it, `--format pdf` prints "PDF
+skipped: ..." and every other format is still written; `test_pdf_is_a_pdf` is skipped.
