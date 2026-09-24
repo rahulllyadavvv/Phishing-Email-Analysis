@@ -1053,3 +1053,29 @@ Plan reviewed and approved before building.
     be unauthenticated. `raw["llm_warning"]` states that the text was sent to Anthropic.
 - A failing classifier becomes an entry in `errors`; the rule layer's findings are unaffected.
   Tests use only fake classifiers, a fake pipeline and a fake Anthropic client.
+
+## P8.3: Training script
+
+- `scripts/train_tone_model.py`: the data preparation, stratified split and metrics are plain
+  Python (unit-tested without ML libraries), and transformers/torch are imported only inside
+  `train()`. A missing dependency exits with code 2 and an install hint; a bad CSV exits with
+  code 1.
+- Cleaning: HTML is stripped only when the text looks like HTML (so `5 < 6` survives),
+  zero-width characters are removed and whitespace collapsed. Empty rows and exact duplicates
+  after cleaning are dropped and counted. Labels other than 0/1 are an error, and the CSV must
+  contain both classes.
+- Split: per-class shuffle with a fixed seed (default 42); validation and test fractions of 0.1
+  each by default, with at least one example per class in each split when a class has 3 or
+  more examples. There is no scikit-learn dependency.
+- Training: `AutoModelForSequenceClassification` with labels `legitimate`/`phishing` (which
+  `LocalTransformerClassifier` recognises), a small in-script torch Dataset (no `datasets`
+  dependency), evaluation every epoch, and the best epoch by validation F1 kept. Afterwards the
+  model and tokenizer are saved to `--output` (default `models/tone`, gitignored), with
+  `metrics.json` (test precision, recall, F1, accuracy, confusion matrix `[[TN, FP], [FN, TP]]`,
+  split sizes, dropped counts, base model and parameters). The checkpoint folder is then removed.
+- The `ml` extra now also includes `accelerate` (required by the Trainer).
+- End-to-end run: done on a tiny synthetic CSV (40 harmless sentences) with
+  `hf-internal-testing/tiny-random-DistilBertForSequenceClassification`. It trained, evaluated and
+  saved, and the saved model loaded through `TONE_MODEL_PATH` in the tone analyzer. That tiny
+  random model cannot learn, so its scores are meaningless; the real default is
+  `distilbert-base-uncased` on a real dataset (`scripts/prepare_datasets.md`).

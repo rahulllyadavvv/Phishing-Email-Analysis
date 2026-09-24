@@ -12,3 +12,6 @@ reports/
 *.sqlite3
 *.egg-info/
 autopilot_run.log
+
+# Trained models (scripts/train_tone_model.py)
+models/
