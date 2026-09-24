@@ -35,7 +35,6 @@ from __future__ import annotations
 import ipaddress
 import re
 import time
-from datetime import UTC, datetime
 from typing import Any
 
 import authres
@@ -54,7 +53,7 @@ from phishlens.models import (
     Severity,
 )
 from phishlens.parser.headers import org_domain
-from phishlens.parser.received import originating_external_ip
+from phishlens.parser.received import delivery_time, originating_external_ip
 
 MODULE = "header"
 
@@ -228,14 +227,6 @@ async def _check_spf(email: ParsedEmail, result: AnalyzerResult) -> None:
     )
 
 
-def _delivery_time(email: ParsedEmail) -> datetime:
-    """When the message was delivered: newest Received timestamp, else Date, else now."""
-    for hop in reversed(email.received_chain):
-        if hop.timestamp is not None:
-            return hop.timestamp
-    return email.date or datetime.now(UTC)
-
-
 def _sig_summary(sig: DkimSignature, **extra: Any) -> dict[str, Any]:
     return {"domain": sig.domain, "selector": sig.selector, **extra}
 
@@ -259,7 +250,7 @@ async def _check_dkim(email: ParsedEmail, result: AnalyzerResult) -> None:
         result.raw["dkim"] = {"signatures": [], "skipped_reason": "no_raw_message"}
         return
     signatures = await verify_dkim(email.raw_bytes) if has_signature else []
-    delivered = _delivery_time(email)
+    delivered = delivery_time(email)
     max_age_days = get_settings().dkim_max_age_days
     result.raw["dkim"] = {
         "signatures": [s.to_dict() for s in signatures],

@@ -21,6 +21,7 @@ the optional ``context`` argument of ``analyze`` (module name -> ``AnalyzerResul
 
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 import unicodedata
@@ -41,8 +42,11 @@ from phishlens.data_loader import (
     is_free_webmail,
     is_risky_tld,
 )
+from phishlens.enrichment import dns as dns_helper
+from phishlens.enrichment.rdap import lookup_domain
 from phishlens.models import Address, AnalyzerResult, Finding, ParsedEmail, Severity
 from phishlens.parser.headers import org_domain
+from phishlens.parser.received import delivery_time
 
 MODULE = "domain"
 
@@ -60,6 +64,14 @@ __all__ = [
     "sender_identity",
     "skeleton",
 ]
+
+# (max age in days, finding id, severity), checked in order.
+DOMAIN_AGE_BUCKETS = (
+    (7, "domain_age_under_7_days", Severity.CRITICAL),
+    (30, "domain_age_under_30_days", Severity.HIGH),
+    (180, "domain_age_under_180_days", Severity.LOW),
+)
+NEW_DOMAIN_DAYS = 30  # younger than this counts as "newly registered" for identity binding
 
 # Claim sources that on their own are weak (a newsletter may mention a brand in its subject).
 WEAK_CLAIM_SOURCES = frozenset({"subject", "body"})
@@ -385,7 +397,7 @@ def bind_identity(
         if legit and not is_free_webmail(domain) and identity.authenticated is not False:
             continue
         is_lookalike = domain in lookalike_domains
-        is_new = domain in new_domains
+        is_new = domain in new_domains or org_domain(domain) in new_domains
         if is_lookalike or is_new:
             severity = Severity.CRITICAL
         elif set(claim.sources) <= WEAK_CLAIM_SOURCES:
@@ -456,6 +468,104 @@ def _check_identity(
             identity,
             lookalike_domains=frozenset(result.raw.get("lookalikes", {})),
             new_domains=frozenset(result.raw.get("new_domains", [])),
+        )
+    )
+
+
+def _age_domains(email: ParsedEmail) -> list[str]:
+    """Registered domains of From, Return-Path and Reply-To, deduplicated, in that order."""
+    addresses = list(email.from_addrs)
+    if email.return_path:
+        addresses.append(email.return_path)
+    addresses += email.reply_to
+    domains: list[str] = []
+    for addr in addresses:
+        registered = addr.org_domain or addr.domain
+        if registered and registered not in domains:
+            domains.append(registered)
+    return domains
+
+
+async def _check_domain_age(email: ParsedEmail, result: AnalyzerResult) -> None:
+    domains = _age_domains(email)
+    delivered = delivery_time(email)
+    lookups = await asyncio.gather(*(lookup_domain(d) for d in domains))
+    ages: dict[str, dict[str, Any]] = {}
+    new_domains: list[str] = []
+    for domain, rdap in zip(domains, lookups, strict=True):
+        entry = rdap.to_dict()
+        entry["age_days"] = None
+        ages[domain] = entry
+        if rdap.status == "error":
+            result.errors.append(f"rdap: {domain}: {rdap.error}")
+            continue
+        if rdap.registered is None:
+            continue
+        age_days = (delivered - rdap.registered).total_seconds() / 86400
+        entry["age_days"] = round(age_days, 1)
+        if age_days < 0:
+            continue  # registered after delivery: the domain changed hands since
+        if age_days < NEW_DOMAIN_DAYS:
+            new_domains.append(domain)
+        for max_days, finding_id, severity in DOMAIN_AGE_BUCKETS:
+            if age_days < max_days:
+                result.findings.append(
+                    _finding(
+                        finding_id,
+                        severity,
+                        f"Domain registered less than {max_days} days before delivery",
+                        f"'{domain}' was registered on {rdap.registered.date().isoformat()}, "
+                        f"{age_days:.0f} days before the message was delivered. Phishing "
+                        "domains are typically used right after registration.",
+                        {
+                            "domain": domain,
+                            "registered": entry["registered"],
+                            "age_days": entry["age_days"],
+                            "registrar": rdap.registrar,
+                        },
+                    )
+                )
+                break
+    result.raw["domain_age"] = ages
+    result.raw["new_domains"] = new_domains
+
+
+def _is_null_mx(records: list[str]) -> bool:
+    return bool(records) and all(r.split(" ", 1)[-1].strip() in ("", ".") for r in records)
+
+
+async def _check_mx(email: ParsedEmail, result: AnalyzerResult) -> None:
+    if not email.from_addrs or not email.from_addrs[0].domain:
+        return
+    domain = email.from_addrs[0].domain
+    mx = await dns_helper.mx(domain)
+    info: dict[str, Any] = {"domain": domain, "records": mx.records, "null_mx": False}
+    result.raw["mx"] = info
+    if mx.ok and not _is_null_mx(mx.records):
+        return
+    if not mx.ok and mx.error not in ("nxdomain", "no_answer"):
+        result.errors.append(f"mx: {domain}: {mx.error}")
+        return
+    if mx.ok:
+        info["null_mx"] = True  # RFC 7505: the domain explicitly accepts no mail
+    else:
+        a_record = await dns_helper.a(domain)
+        info["has_a_record"] = a_record.ok and bool(a_record.records)
+        if info["has_a_record"]:
+            return  # RFC 5321 implicit MX: mail goes to the A record
+        if not a_record.ok and a_record.error not in ("nxdomain", "no_answer"):
+            result.errors.append(f"mx: {domain}: A lookup {a_record.error}")
+            return
+    result.findings.append(
+        _finding(
+            "from_domain_no_mx",
+            Severity.MEDIUM,
+            "From domain cannot receive email",
+            f"'{domain}' has "
+            + ("a null MX record" if info["null_mx"] else "no MX and no A record")
+            + ", so replies to the sender cannot be delivered. Legitimate senders "
+            "normally accept replies or bounces.",
+            dict(info),
         )
     )
 
@@ -602,12 +712,26 @@ async def analyze(
         ("consistency", _check_consistency),
         ("display_name", _check_display_name),
         ("lookalike", _check_lookalikes),
-        ("identity", lambda e, r: _check_identity(e, r, context)),
     )
     for name, check in checks:
         try:
             check(email, result)
         except Exception as exc:
             result.errors.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    async def guarded(name: str, coro: Any) -> None:
+        try:
+            await coro
+        except Exception as exc:
+            result.errors.append(f"{name}: {type(exc).__name__}: {exc}")
+
+    await asyncio.gather(
+        guarded("domain_age", _check_domain_age(email, result)),
+        guarded("mx", _check_mx(email, result)),
+    )
+    try:
+        _check_identity(email, result, context)  # after domain age: needs raw["new_domains"]
+    except Exception as exc:
+        result.errors.append(f"identity: {type(exc).__name__}: {exc}")
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result

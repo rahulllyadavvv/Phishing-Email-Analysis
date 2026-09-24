@@ -18,7 +18,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
-from phishlens.models import ReceivedHop
+from phishlens.models import ParsedEmail, ReceivedHop
 
 _WS_RE = re.compile(r"\s+")
 _BRACKET_RE = re.compile(r"\[(?:IPv6:)?([0-9A-Fa-f:.]+)\]", re.IGNORECASE)
@@ -226,3 +226,14 @@ def originating_external_ip(
             continue
         return hop.ip
     return None
+
+
+def delivery_time(email: ParsedEmail) -> datetime:
+    """When the message was delivered: the newest Received timestamp, else Date, else now.
+
+    The newest hop was written by our own receiving server, so it is the most trustworthy.
+    """
+    for hop in reversed(email.received_chain):
+        if hop.timestamp is not None:
+            return hop.timestamp
+    return email.date or datetime.now(UTC)

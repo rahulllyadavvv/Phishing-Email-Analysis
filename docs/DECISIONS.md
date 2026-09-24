@@ -488,3 +488,32 @@
   to avoid false positives.
 - `raw["identity"]` records the sender domain, whether it authenticated, and the claimed brands
   with their sources.
+
+## P3.5: Domain age and MX
+
+- `phishlens/enrichment/rdap.py` is a minimal RDAP client: `GET https://rdap.org/domain/<domain>`
+  with httpx, following the bootstrap redirect to the registry. It reads the `registration` and
+  `expiration` events and the registrar name (vCard `fn`, else the handle). It never raises.
+  Status is `ok`, `not_found` (HTTP 404), `reserved` or `error`. `ok` and `not_found` are cached in
+  memory for `RDAP_CACHE_TTL_SECONDS` (default 1 day; `0` disables); errors are retried. New
+  settings: `RDAP_TIMEOUT_SECONDS` (10) and `RDAP_CACHE_TTL_SECONDS`. P4.1 moves this onto the
+  shared base client (rate limiting, persistent cache).
+- Reserved names (`.example`, `.test`, `.invalid`, `.localhost`, `.local`, and
+  `example.com/net/org`) are never sent to RDAP. They get status `reserved` and no finding.
+- Only registered (organizational) domains are looked up, deduplicated across From, Return-Path
+  and Reply-To. Sender is not looked up, following the plan.
+- Age is measured at delivery time (`parser.received.delivery_time`: newest Received timestamp,
+  else Date, else now), so old mail analyzed later is judged by its age when it arrived.
+  `delivery_time` moved there from the header analyzer, which now uses it too. A registration
+  date after delivery (the domain changed hands since) gives no finding.
+- Findings, one per domain for the youngest bucket that applies: `domain_age_under_7_days`
+  (critical), `domain_age_under_30_days` (high), `domain_age_under_180_days` (low). Domains under
+  30 days old go into `raw["new_domains"]`, which makes `brand_impersonation` critical.
+  `raw["domain_age"]` holds the RDAP data and `age_days` for every domain. An RDAP failure is
+  recorded in `AnalyzerResult.errors` (`rdap: <domain>: <error>`), never as a finding.
+- MX follows RFC 5321/7505: `from_domain_no_mx` (medium) fires when the From domain has no MX
+  and no A record (implicit MX), or publishes a null MX (`0 .`). Mail to a domain with an A
+  record but no MX is still deliverable, and many sending subdomains are set up that way. DNS
+  errors other than NXDOMAIN/no answer go into `errors`. `raw["mx"]` shows what was found.
+- The async checks (domain age, MX) run concurrently after the sync ones. Identity binding runs
+  last, because it needs `raw["new_domains"]`.

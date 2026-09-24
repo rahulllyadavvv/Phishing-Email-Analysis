@@ -2,18 +2,41 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import dns.exception
+import httpx
 import pytest
+import respx
 
 from phishlens import data_loader
 from phishlens.analyzers import domain, header
 from phishlens.analyzers.domain import find_brand_mentions
+from phishlens.enrichment import rdap
 from phishlens.models import AnalyzerResult, Severity
 from phishlens.parser import parse_email
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ALL_FIXTURES = sorted(p.name for p in FIXTURES.glob("*.eml"))
+
+
+@pytest.fixture(autouse=True)
+def offline(fake_dns) -> Iterator[dict[str, httpx.Response]]:
+    """Empty DNS and an RDAP mock. Tests put ``domain -> Response`` into the returned dict;
+    other domains get 404."""
+    fake_dns({})
+    rdap.clear_cache()
+    answers: dict[str, httpx.Response] = {}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        return answers.get(request.url.path.rsplit("/", 1)[-1]) or httpx.Response(404)
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__startswith=rdap.RDAP_BOOTSTRAP_URL).mock(side_effect=reply)
+        yield answers
+    rdap.clear_cache()
 
 
 def _email(headers: str):
@@ -278,7 +301,8 @@ async def test_punycode_domain_findings() -> None:
     assert _ids(result)["lookalike_domain"].evidence["decoded"] == "аpple.com"
 
 
-async def test_no_lookalike_for_genuine_sender() -> None:
+async def test_no_lookalike_for_genuine_sender(fake_dns) -> None:
+    fake_dns({("accountprotection.microsoft.com", "MX"): ["10 mx.microsoft.com"]})
     result = await _analyze("From: Microsoft <no-reply@accountprotection.microsoft.com>")
     assert result.findings == []
     assert result.raw["lookalikes"] == {}
@@ -396,3 +420,126 @@ def test_bind_identity_new_domain_is_critical() -> None:
     assert finding.severity == Severity.CRITICAL
     assert finding.evidence["newly_registered"] is True
     assert domain.bind_identity([], domain.SenderIdentity("x.test", None)) == []
+
+
+
+# --- Domain age and MX ---------------------------------------------------------------------------
+
+DELIVERED = datetime(2026, 9, 7, 9, 0, tzinfo=UTC)  # Received timestamp of the fixtures
+
+
+def _registered(answers: dict, domain: str, days_before_delivery: float) -> None:
+    when = DELIVERED - timedelta(days=days_before_delivery)
+    answers[domain] = httpx.Response(
+        200,
+        json={
+            "objectClassName": "domain",
+            "events": [{"eventAction": "registration", "eventDate": when.isoformat()}],
+        },
+    )
+
+
+def _fixture2():
+    return parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes())
+
+
+@pytest.mark.parametrize(
+    ("days", "finding_id", "severity"),
+    [
+        (3, "domain_age_under_7_days", Severity.CRITICAL),
+        (20, "domain_age_under_30_days", Severity.HIGH),
+        (100, "domain_age_under_180_days", Severity.LOW),
+        (400, None, None),
+    ],
+)
+async def test_domain_age_buckets(
+    offline, days: int, finding_id: str | None, severity: Severity | None
+) -> None:
+    _registered(offline, "zetatech.xyz", days)
+    result = await domain.analyze(_fixture2())
+    age = [f for f in result.findings if f.id.startswith("domain_age_")]
+    if finding_id is None:
+        assert age == []
+    else:
+        [finding] = age
+        assert (finding.id, finding.severity) == (finding_id, severity)
+        assert finding.evidence["domain"] == "zetatech.xyz"
+        assert finding.evidence["age_days"] == pytest.approx(days, abs=0.1)
+    assert result.raw["domain_age"]["zetatech.xyz"]["age_days"] == pytest.approx(days, abs=0.1)
+    assert result.raw["domain_age"]["microsoft.com"]["status"] == "not_found"
+    assert (result.raw["new_domains"] == ["zetatech.xyz"]) is (days < 30)
+
+
+async def test_domain_age_domains_are_deduplicated() -> None:
+    email = _email(
+        "Return-Path: <b@mail.shop.xyz>\nFrom: a@shop.xyz\nReply-To: c@other.xyz\n"
+        "Sender: s@ignored.xyz"
+    )
+    assert domain._age_domains(email) == ["shop.xyz", "other.xyz"]
+
+
+async def test_registered_after_delivery_is_ignored(offline) -> None:
+    _registered(offline, "zetatech.xyz", -30)
+    result = await domain.analyze(_fixture2())
+    assert not [f for f in result.findings if f.id.startswith("domain_age_")]
+    assert result.raw["new_domains"] == []
+
+
+async def test_rdap_unavailable_is_an_error_not_a_finding(offline) -> None:
+    offline["zetatech.xyz"] = httpx.Response(503)
+    result = await domain.analyze(_fixture2())
+    assert result.errors == ["rdap: zetatech.xyz: HTTP 503"]
+    assert not [f for f in result.findings if f.id.startswith("domain_age_")]
+
+
+async def test_new_domain_makes_brand_impersonation_critical(offline) -> None:
+    _registered(offline, "billing-center.com", 5)
+    email = _email(
+        "Received: from m.billing-center.com ([203.0.113.9]) by mx.recipient.test;"
+        " Mon, 07 Sep 2026 09:00:00 +0000\n"
+        'From: "PayPal Service" <billing@billing-center.com>'
+    )
+    result = await domain.analyze(email, _header_context(dmarc_aligned=True))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["newly_registered"] is True
+    assert finding.evidence["lookalike"] is False
+
+
+def _mx_findings(result) -> list:
+    return [f for f in result.findings if f.id == "from_domain_no_mx"]
+
+
+async def test_no_mx_and_no_a_is_flagged() -> None:
+    result = await _analyze("From: a@nomail.xyz")
+    [finding] = _mx_findings(result)
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["null_mx"] is False
+    assert finding.evidence["has_a_record"] is False
+
+
+async def test_null_mx_is_flagged(fake_dns) -> None:
+    fake_dns({("nomail.xyz", "MX"): ["0 ."]})
+    [finding] = _mx_findings(await _analyze("From: a@nomail.xyz"))
+    assert finding.evidence["null_mx"] is True
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        {("mail.xyz", "MX"): ["10 mx.mail.xyz"]},
+        {("mail.xyz", "A"): ["198.51.100.5"]},  # implicit MX
+    ],
+)
+async def test_domain_that_accepts_mail_is_fine(fake_dns, answers: dict) -> None:
+    fake_dns(answers)
+    result = await _analyze("From: a@mail.xyz")
+    assert _mx_findings(result) == []
+    assert result.raw["mx"]["domain"] == "mail.xyz"
+
+
+async def test_mx_lookup_failure_is_an_error(fake_dns) -> None:
+    fake_dns({("slow.xyz", "MX"): dns.exception.Timeout()})
+    result = await _analyze("From: a@slow.xyz")
+    assert _mx_findings(result) == []
+    assert result.errors == ["mx: slow.xyz: timeout"]

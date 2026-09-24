@@ -51,6 +51,8 @@ def test_defaults_without_env_file() -> None:
     assert settings.dns_sqlite_cache is True
     assert settings.dns_cache_path == "phishlens_dns_cache.sqlite"
     assert settings.dkim_max_age_days == 7.0
+    assert settings.rdap_timeout_seconds == 10.0
+    assert settings.rdap_cache_ttl_seconds == 86400
     assert not any(settings.configured_services().values())
 
 

@@ -68,6 +68,10 @@ class Settings(BaseSettings):
     dns_sqlite_cache: bool = True
     dns_cache_path: str = "phishlens_dns_cache.sqlite"
 
+    # RDAP (domain registration dates): request timeout and in-memory cache lifetime.
+    rdap_timeout_seconds: float = Field(default=10.0, gt=0)
+    rdap_cache_ttl_seconds: int = Field(default=86400, ge=0)
+
     # DKIM: a valid signature older than this (at delivery time) may be a replayed message.
     dkim_max_age_days: float = Field(default=7.0, gt=0)
 
