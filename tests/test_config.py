@@ -52,6 +52,7 @@ def test_defaults_without_env_file() -> None:
     assert settings.dns_cache_path == "phishlens_dns_cache.sqlite"
     assert settings.dkim_max_age_days == 7.0
     assert settings.enrichment_timeout_seconds == 15.0
+    assert settings.vt_malicious_threshold == 3
     assert settings.enrichment_max_retries == 3
     assert settings.enrichment_cache is True
     assert settings.cache_ttl("virustotal") == 86400

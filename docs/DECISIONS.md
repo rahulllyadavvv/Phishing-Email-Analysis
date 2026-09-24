@@ -558,3 +558,28 @@ Plan reviewed and approved before building.
 - Tests: an autouse fixture in `tests/conftest.py` gives every test its own cache file, empty
   caches and limiters, and replaces `base._sleep` with a recorder, so retries and rate limits
   never really wait.
+
+## P4.2: VirusTotal client
+
+- `VirusTotalClient` (`phishlens/enrichment/virustotal.py`) has `url`, `file` (MD5/SHA-1/SHA-256),
+  `domain` and `ip` lookups through `cached_lookup`, plus `upload_file`. The key goes in the
+  `x-apikey` header only.
+- URL id = unpadded base64url of the URL as given (only surrounding whitespace is stripped). VT
+  canonicalizes URLs itself, and changing the case of a path could change the identity.
+  Hashes and domains are lowercased.
+- Status mapping from `last_analysis_stats`: malicious when `malicious >= VT_MALICIOUS_THRESHOLD`
+  (new setting, default 3); suspicious when any `malicious` or `suspicious` vote is below that;
+  clean when engines ran with no such votes; unknown when there are no engine results, or on
+  HTTP 404 (not in VT, `details.found = False`; this is cached like any definitive answer).
+  `detections` = malicious votes, `total_engines` = the sum of all counts.
+- `details` keeps the stats, reputation, `last_analysis_date` and a few fields per type (URL: final
+  URL, title, categories; file: name, type, size; domain: categories, creation date,
+  registrar; IP: country, AS owner, network). Links go to the VT GUI (`/gui/url|file|domain|
+  ip-address/...`).
+- Upload: only when `UPLOAD_FILES_TO_VT=true` (CLAUDE.md safety rule). Otherwise it returns
+  `not_configured` with a reason and makes no network call. Files over 32 MB are refused (they
+  would need VT's separate `upload_url` flow). An upload returns status `unknown` with the
+  `analysis_id`, because the verdict comes later from a `file` hash lookup. Uploads are not
+  cached.
+- 401/403 and other client errors become `error` (`HTTP <code>`). A 429 goes through the base
+  client's retries; a daily quota that is still exhausted ends as `HTTP 429 (after N attempts)`.

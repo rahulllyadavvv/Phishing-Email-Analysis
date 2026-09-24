@@ -70,6 +70,9 @@ class Settings(BaseSettings):
 
     # Safety: files are only uploaded to VirusTotal when explicitly enabled.
     upload_files_to_vt: bool = False
+    # VirusTotal: this many engines flagging "malicious" makes the verdict malicious (fewer, or
+    # any "suspicious" votes, make it suspicious).
+    vt_malicious_threshold: int = Field(default=3, ge=1)
 
     # API authentication for the FastAPI backend (None disables auth checks for local use).
     phishlens_api_key: SecretStr | None = None
