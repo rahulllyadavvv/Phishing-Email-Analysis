@@ -1626,3 +1626,18 @@ Plan reviewed and approved before building.
   a multi-host setup would switch `DATABASE_URL` to a server database.
 - `.env` is `required: false` in compose, so `docker compose up` works without one (all API keys
   are optional).
+
+## P15.2: Continuous integration
+
+- **Two jobs.** `test` (ubuntu, Python 3.11, apt libmagic/zbar/Pango, pip cache keyed on
+  `pyproject.toml`, `ruff check .`, `pytest -q -rs`) and `docker` (Buildx build with the GitHub
+  Actions layer cache, not pushed, then a smoke run of `phishlens check-config` and an import of
+  the native-library packages, plus `docker compose config`).
+- **The network guard fails swallowed attempts.** Analyzers never raise, so a blocked connection
+  used to be caught and recorded as an analyzer error, and the test could still pass. The
+  autouse `no_network` fixture now records every attempt and fails the test at teardown unless
+  it is marked `network_attempt_expected` (only the guard's own tests are). A pytester test
+  proves a swallowed attempt fails. With the stricter guard the whole suite still passes, so no
+  test was reaching the network.
+- In CI the libmagic, zbar and WeasyPrint tests run; on the dev Mac they are skipped (see
+  SETUP_NOTES).

@@ -48,3 +48,15 @@ def test_makefile_targets() -> None:
     makefile = (ROOT / "Makefile").read_text()
     for target in ("up:", "down:", "test:", "lint:", "fixtures:"):
         assert f"\n{target}" in f"\n{makefile}"
+
+
+def test_ci_workflow() -> None:
+    ci = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text())
+    assert set(ci[True]) == {"push", "pull_request"}  # YAML 1.1 reads the key "on" as True
+    steps = ci["jobs"]["test"]["steps"]
+    commands = " ".join(step.get("run", "") for step in steps)
+    assert "ruff check ." in commands and "pytest" in commands and "libzbar0" in commands
+    python = next(s for s in steps if s.get("uses", "").startswith("actions/setup-python"))
+    assert python["with"]["python-version"] == "3.11" and python["with"]["cache"] == "pip"
+    build = [s for s in ci["jobs"]["docker"]["steps"] if "build-push-action" in s.get("uses", "")]
+    assert build and build[0]["with"]["push"] is False

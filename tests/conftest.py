@@ -22,22 +22,31 @@ from phishlens.enrichment import dns as dns_helper
 from phishlens.parser import parse_email
 from phishlens.parser.received import originating_external_ip
 
+pytest_plugins = ["pytester"]
+
 
 class NetworkBlockedError(RuntimeError):
     """A test tried to open a real network connection."""
 
 
 @pytest.fixture(autouse=True)
-def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CLAUDE.md: all network is mocked in tests. Any real connection attempt fails loudly.
-    respx (HTTP) and ``fake_dns`` (DNS) intercept before a socket is ever opened."""
+def no_network(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Iterator[None]:
+    """CLAUDE.md: all network is mocked in tests. Any real connection attempt raises and, since
+    analyzers catch exceptions, is also recorded and fails the test at teardown (unless the test
+    is marked ``network_attempt_expected``). respx (HTTP) and ``fake_dns`` (DNS) intercept
+    before a socket is ever opened."""
+    attempts: list[str] = []
 
     def blocked(*args: object, **kwargs: object) -> None:
+        attempts.append(repr(args[1:]))
         raise NetworkBlockedError(f"real network access in a test: {args[1:]!r}")
 
     monkeypatch.setattr(socket.socket, "connect", blocked)
     monkeypatch.setattr(socket.socket, "connect_ex", blocked)
     monkeypatch.setattr(socket, "getaddrinfo", blocked)
+    yield
+    if attempts and not request.node.get_closest_marker("network_attempt_expected"):
+        pytest.fail(f"test tried real network access: {', '.join(attempts[:5])}")
 
 
 @pytest.fixture(autouse=True)
