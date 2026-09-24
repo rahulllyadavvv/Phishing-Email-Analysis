@@ -1516,3 +1516,29 @@ Plan reviewed and approved before building.
 - Tests: the client with respx (every endpoint, the key header, each friendly error, backend
   down) and the app with Streamlit's `AppTest` (backend online, down, Redis down). A manual smoke
   run started the real API (`JOB_QUEUE=sync`) and UI servers; both answered their health checks.
+
+## P13.2: Analyze page
+
+- Three tabs as planned. "Analyze email": uploader restricted to .eml/.msg (the API checks the
+  content anyway), plus the "How do I get the email file?" expander (Gmail, Outlook desktop,
+  Outlook on the web, Thunderbird; screenshots, PDFs and copied text do not work; forwarding
+  loses headers). "Analyze file": multiple files of any type, with the plan's note. "Paste email
+  source": a text area with hints for Gmail "Show original".
+- An "Analyze again" toggle sends `force=true` (P12.4 deduplication). When the API answers
+  `duplicate: true` the page says the input was already analyzed and shows that case.
+- Progress logic is in `ui/progress.py` (pure functions, unit-tested). `steps(status)` maps
+  the API's per-module progress onto the 11 steps the plan lists: Parsing (done once any module
+  started), Header ... Hidden artifacts (the module states), IOCs and MITRE mapping (done once
+  scoring started), Scoring, Report (done when the case is done). Each step is pending, running,
+  done, error or skipped (the email-only modules in file cases). `poll(case_ids, get_status,
+  render)` refreshes every unfinished case once a second until all are done/error (30 min cap).
+  Its sleep goes through a module hook (`progress._sleep`) so tests never patch `time.sleep`
+  globally, which breaks Streamlit's AppTest.
+- Each submitted case gets its own bordered progress card, redrawn in place, with the step icons
+  and the final verdict or error. A single finished case opens the Case view
+  (`st.switch_page(..., query_params={"id": case_id})`, and `session_state["case_id"]`);
+  several cases show an "Open" button each.
+- API errors (too large, not an email, rate limited, backend down) are shown as they come from
+  `ApiError`.
+- AppTest cannot drive file uploads, so the flow is tested end to end through the paste tab
+  (input, submit, two polls, switch to the case), and the upload tabs share the same code path.
