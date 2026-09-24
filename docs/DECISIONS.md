@@ -1177,3 +1177,50 @@ Plan reviewed and approved before building.
   differs from the data. It is skipped when the data has not been downloaded.
 - `scripts/update_attack_data.py` streams the file to `.part`, checks that it is a STIX bundle,
   then replaces the old file.
+
+## P10.1: Scoring engine
+
+Plan reviewed and approved before building.
+
+- `data/weights.yaml` (CLAUDE.md lists weights among the `data/` files) holds: an explicit
+  weight for all 101 finding IDs (a test fails when an analyzer produces an unweighted ID); a
+  severity fallback (info 0, low 5, medium 15, high 30, critical 50); module caps (attachments
+  70, header 60, urls 60, domain 50, tone 30, artifacts 25); thresholds; overrides; and
+  confidence settings. `phishlens/scoring/weights.py` validates it: all five severities in the
+  fallback, known severities in per-severity weight maps, `0 < suspicious < malicious <= 100`,
+  exactly one condition per override.
+- A weight can be a per-severity map (for example `brand_impersonation: {critical: 50, high:
+  35, medium: 15}`) for findings whose severity varies. A severity missing from the map uses the
+  fallback.
+- `finding_points` scaling: tone findings get weight x (0.5 + 0.5 x counted/cap), so one phrase
+  earns 60% and a full category 100%; `evidence.probability` (the ML finding) multiplies the
+  weight; findings downgraded by a trusted ARC forward (`evidence.downgraded_by`) score at the
+  severity fallback of their new severity (low = 5). That is how `arc_trusted_forward` reduces
+  header penalties.
+- Findings are grouped per ID in the analyzers (one finding per kind of problem), so scores do
+  not grow with the number of URLs or files.
+- `RuleScorer.score(results, case_type)`: module points capped, total clamped 0-100. Labels:
+  email clean < 30 <= suspicious < 60 <= malicious; file clean < 20 <= suspicious < 50 <=
+  malicious (thresholds inclusive). `Finding.score` of every finding is set to its (uncapped)
+  contribution. `top_findings` holds the 5 largest positive contributors.
+- Overrides: `attachment_known_malicious`, `url_known_malicious`, `sandbox_malicious`,
+  `html_smuggling` -> malicious; `auth_but_unaligned` + `brand_impersonation` -> malicious;
+  any critical finding -> at least suspicious. An override never lowers a label, raises the
+  score to at least the forced label's threshold, and is listed in `overrides_applied`
+  (including when it did not change the label).
+- Confidence = share of analyzers that ran without errors (skipped ones do not count; 1.0 when
+  none ran), minus 0.1 per unconfigured key service (VirusTotal, Safe Browsing, abuse.ch),
+  with the penalty capped at 0.3 and a floor of 0.1.
+- `Scorer` protocol and `get_scorer()` (`SCORER=rule|ml`). `MLScorer` loads a joblib bundle
+  `{"model", "features"}` from `SCORER_MODEL_PATH`. The model's probability x 100 replaces
+  the total score, the label is recomputed, and overrides still apply. Without a model (or
+  without scikit-learn/joblib) it returns the rule verdict with
+  `ml_scorer_unavailable_used_rules` in `overrides_applied`. scikit-learn is not a dependency;
+  it is only needed by whoever trains such a model.
+- `phishlens/scoring/features.py`: a stable column list (every weighted finding ID, then
+  `module:<name>`), with values in points. `scripts/export_features.py` writes one CSV row per
+  saved `AnalysisReport` (reports that are not AnalysisReports are skipped). Labels come from a
+  `case_id,label` CSV, or with `--use-verdict` from the report's own verdict (weak labels,
+  documented as such).
+- The initial weights are a first calibration. P10.2 checks every fixture against
+  `tests/fixtures/labels.yaml` and adjusts weights if needed.

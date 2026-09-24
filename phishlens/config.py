@@ -122,6 +122,11 @@ class Settings(BaseSettings):
     llm_tone_enabled: bool = False
     llm_model: str = "claude-opus-5"
 
+    # Scoring: "rule" (weights in data/weights.yaml) or "ml" (a scikit-learn model saved with
+    # joblib at SCORER_MODEL_PATH; falls back to the rules when it cannot be loaded).
+    scorer: str = "rule"
+    scorer_model_path: str | None = None
+
     # Sandbox: how long to wait for a report and how often to poll.
     sandbox_max_wait_seconds: float = Field(default=300.0, gt=0)
     sandbox_poll_seconds: float = Field(default=15.0, gt=0)
@@ -168,6 +173,14 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_dots(cls, value: list[str]) -> list[str]:
         return [ext.lstrip(".") for ext in value if ext.lstrip(".")]
+
+    @field_validator("scorer")
+    @classmethod
+    def _check_scorer(cls, value: str) -> str:
+        value = value.strip().lower()
+        if value not in ("rule", "ml"):
+            raise ValueError("SCORER must be rule or ml")
+        return value
 
     @field_validator("urlscan_visibility")
     @classmethod

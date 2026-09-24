@@ -1,0 +1,154 @@
+# Scoring weights for the rule-based scorer (phishlens/scoring/rule_scorer.py).
+#
+# weights: points per finding ID. A number, or a map by severity for findings whose severity
+#   varies ({critical: 50, high: 35, medium: 15}); a severity missing from the map uses the
+#   severity fallback. Findings not listed use the severity fallback.
+#   Scaling applied in code:
+#   - tone findings with evidence.counted / evidence.cap: weight x (0.5 + 0.5 x counted / cap)
+#   - findings with evidence.probability (ML): weight x probability
+#   - findings downgraded by a trusted ARC forward (evidence.downgraded_by): severity fallback
+# severity_fallback: points by severity when no weight is given.
+# module_caps: the most points one module can contribute.
+# thresholds: score from which a case is suspicious / malicious, per case type.
+# overrides: rules that force a minimum label. Condition: any_of (one finding), all_of (every
+#   finding) or min_severity (any finding at or above it). The score is raised to at least the
+#   threshold of the forced label.
+# confidence: key reputation services; each one not configured lowers confidence.
+# Finding IDs are stable: never rename one here without renaming it in the code (CLAUDE.md).
+
+severity_fallback: {info: 0, low: 5, medium: 15, high: 30, critical: 50}
+
+module_caps:
+  header: 60
+  domain: 50
+  urls: 60
+  attachments: 70
+  artifacts: 25
+  tone: 30
+
+thresholds:
+  email: {suspicious: 30, malicious: 60}
+  file: {suspicious: 20, malicious: 50}
+
+overrides:
+  - {name: known_malicious_attachment, label: malicious, any_of: [attachment_known_malicious]}
+  - {name: known_malicious_url, label: malicious, any_of: [url_known_malicious]}
+  - {name: sandbox_malicious, label: malicious, any_of: [sandbox_malicious]}
+  - {name: html_smuggling, label: malicious, any_of: [html_smuggling]}
+  - {name: spoofed_brand, label: malicious, all_of: [auth_but_unaligned, brand_impersonation]}
+  - {name: critical_finding, label: suspicious, min_severity: critical}
+
+confidence:
+  key_services: [virustotal, google_safebrowsing, abusech]
+  penalty_per_missing_service: 0.1
+  max_service_penalty: 0.3
+  minimum: 0.1
+
+weights:
+  # header
+  forged_auth_results_header: 15
+  spf_fail: 25
+  spf_softfail: 12
+  spf_none: 5
+  spf_error: 3
+  dkim_invalid: {medium: 15, low: 5}
+  dkim_none: 3
+  dkim_body_length_tag: 10
+  dkim_unsigned_critical_headers: 10
+  dkim_expired_or_old: 10
+  spf_pass_unaligned: 20
+  dkim_pass_unaligned: 20
+  auth_but_unaligned: 45
+  dmarc_fail: 25
+  dmarc_none_record: 5
+  dmarc_policy_none: 3
+  esp_unaligned: 10
+  arc_trusted_forward: 0
+  multiple_from_headers: 30
+  display_name_contains_address: 20
+  received_chain_anomaly: 5
+  # domain
+  returnpath_mismatch: {low: 5, info: 0}
+  replyto_mismatch: 15
+  replyto_free_webmail: {high: 25, medium: 15}
+  display_name_brand_spoof: 30
+  lookalike_domain: 35
+  punycode_domain: {high: 25, medium: 15}
+  brand_impersonation: {critical: 50, high: 35, medium: 15}
+  domain_age_under_7_days: 40
+  domain_age_under_30_days: 25
+  domain_age_under_180_days: 5
+  from_domain_no_mx: 10
+  # urls
+  link_text_mismatch: 30
+  ip_address_url: 15
+  url_shortener: 5
+  at_sign_in_url: 30
+  excessive_subdomains: 5
+  brand_in_unrelated_domain: 30
+  risky_tld: 5
+  credential_keywords: 5
+  data_or_javascript_uri: 30
+  punycode_url: {high: 25, medium: 15}
+  url_known_malicious: 60
+  url_suspicious_reputation: 15
+  urlscan_login_page_on_unrelated_domain: 35
+  redirect_to_different_domain: 10
+  # attachments
+  type_mismatch: 35
+  double_extension: 40
+  rtlo_filename: 40
+  whitespace_padded_extension: 20
+  high_risk_file_type: 15
+  archive_limit_exceeded: 15
+  encrypted_archive_password_in_body: 35
+  encrypted_archive_unopened: 25
+  attachment_known_malicious: 70
+  office_macro_autoexec: 35
+  office_macro_suspicious_calls: 35
+  xlm_macro: 35
+  remote_template_injection: 40
+  office_external_link: 15
+  rtf_embedded_object: 15
+  encrypted_office_document: 15
+  pdf_javascript: 30
+  pdf_auto_action: 25
+  pdf_launch_action: 50
+  pdf_embedded_file: 15
+  html_smuggling: 60
+  credential_form_attachment: 40
+  svg_script: 35
+  obfuscated_script: 15
+  pe_executable_attachment: 35
+  pe_packed: 15
+  lnk_suspicious_command: 50
+  qr_code_url: 20
+  yara_match: {critical: 50, high: 30, medium: 15, low: 5}
+  sandbox_malicious: 70
+  sandbox_suspicious: 20
+  # artifacts
+  tracking_pixel: 2
+  hidden_text: 15
+  hidden_filler_text: 10
+  zero_width_characters: 15
+  text_html_mismatch: 5
+  encoded_link: 15
+  script_in_body: 25
+  meta_refresh: 15
+  missing_message_id: 5
+  missing_date: 5
+  date_in_future: 10
+  date_too_old: 5
+  message_id_domain_mismatch: 2
+  suspicious_mailer: 10
+  # tone
+  tone_urgency: 12
+  tone_fear: 12
+  tone_greed: 12
+  tone_authority: 5
+  credential_request: 20
+  payment_request: 20
+  secrecy_request: 12
+  generic_greeting: 5
+  ml_phishing_probability_high: {high: 30, medium: 20}
+  llm_impersonation: 15
