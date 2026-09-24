@@ -1490,3 +1490,29 @@ Plan reviewed and approved before building.
 - Quarantined inputs are never returned: downloads must resolve inside `REPORTS_DIR` (a tampered
   `report_files` entry pointing at the quarantine gives 404), and no endpoint reads upload
   contents back.
+
+## P13.1: UI foundation
+
+- The UI (`ui/`, Streamlit 1.64) talks only to the API through `ui/api_client.py`. It imports
+  nothing from the analysis code and never analyzes. Base URL `PHISHLENS_API_URL` (default
+  `http://localhost:8000`) and `PHISHLENS_API_KEY` (sent as `X-API-Key`) come from the
+  environment.
+- `api_client` is a typed function per endpoint over httpx (30 s timeouts, 300 s for uploads).
+  Every failure becomes `ApiError` with an actionable message: backend unreachable (with the
+  uvicorn command), timeout, 401 (set PHISHLENS_API_KEY), 413 (the backend's size message),
+  429 (wait N seconds from Retry-After), 404 and validation errors (the backend's detail).
+  Empty/"All" filters are left out of list queries.
+- `ui/theme.py` defines the verdict colors (green Clean, amber Suspicious, red Malicious, grey
+  unknown) and severity colors once, plus `verdict_badge`, `score_gauge` (a 0-100 bar in the
+  verdict color), `severity_pill`, `status_dot` and `defanged_code` (`st.code`, which has a copy
+  button). The small HTML they emit is built from `html.escape`d values; nothing from an email
+  or attachment is ever rendered as HTML (the API content is defanged text).
+- `.streamlit/config.toml`: light professional theme in the report's colors, headless, 25 MB
+  upload limit (the API default), XSRF protection on, no usage statistics.
+- `ui/app.py` uses `st.navigation` with pages Analyze (default), Case view (`/case`), History and
+  Settings. The sidebar shows the PhishLens name, a backend status dot from `/api/health`
+  (cached 10 s), a warning when the job queue's Redis is down, and the API URL. The pages are
+  filled in P13.2-P13.4.
+- Tests: the client with respx (every endpoint, the key header, each friendly error, backend
+  down) and the app with Streamlit's `AppTest` (backend online, down, Redis down). A manual smoke
+  run started the real API (`JOB_QUEUE=sync`) and UI servers; both answered their health checks.
