@@ -1224,3 +1224,41 @@ Plan reviewed and approved before building.
   documented as such).
 - The initial weights are a first calibration. P10.2 checks every fixture against
   `tests/fixtures/labels.yaml` and adjusts weights if needed.
+
+## P10.2: Email pipeline orchestrator
+
+- `phishlens/pipeline.py`: `analyze_email(raw_bytes, progress_cb=None, *, network=True,
+  case_id=None) -> AnalysisReport`. The case ID is a random UUID (hex) unless given.
+- Order: header first; then concurrently [domain -> tone], artifacts and attachments. Tone
+  runs after domain (a deviation from the plan's "all four concurrently") because it skips
+  brands the domain analyzer already reported, so each brand gives one `brand_impersonation`.
+  Then urls with `email.urls` plus attachment and artifact `extracted_urls`. Each analyzer gets
+  a `context` dict with the results so far.
+- `run_analyzer`: `asyncio.wait_for` with `ANALYZER_TIMEOUT_SECONDS` (120), or
+  `ATTACHMENT_TIMEOUT_SECONDS` (900, it may wait for a sandbox). A timeout or exception becomes
+  an `AnalyzerResult` with only an error, which lowers confidence and does not stop the
+  pipeline. `progress_cb(module, status)` may be a function or a coroutine and gets `pending`
+  (all modules first), `running`, `done` or `error`, plus `nested` and `scoring`. A failing
+  progress callback is ignored.
+- Nested emails (`message/rfc822`, up to `NESTED_EMAIL_MAX_DEPTH` = 2): each is analyzed with
+  the same pipeline (no progress events). Their findings are copied into a `nested` result
+  with `module = "nested.<analyzer>"` and `evidence["nested"] = "nested:<n>"`, so a forwarded
+  phishing mail counts toward the verdict. It has its own module cap (60 in `weights.yaml`).
+  `raw["emails"]` lists subject/from/errors per nested mail. Nested IOCs are merged into the
+  case's IOCs (`merge_iocs`: same type+value merges sources/contexts, worst verdict wins).
+- After scoring, the MITRE mapping writes technique IDs into each triggering finding's `mitre`
+  list, so reports can show them per finding.
+- Offline mode (`network=False`, used by the CLI's `--no-network`):
+  `phishlens/enrichment/network.py` holds a context variable that every DNS lookup (error
+  `offline`), enrichment/sandbox client (`not_configured`, reason "network disabled"), RDAP
+  (`skipped`) and the LLM respect. The analyzers treat it as skipped, not as an error: the
+  header records SPF `skipped_reason: offline`, the domain analyzer skips MX. The pipeline also
+  turns off hash/URL reputation and the sandbox. `services_used` is then empty.
+- `services_used` / `services_not_configured` come from `Settings.configured_services()`
+  (names only, never keys).
+- Calibration against `tests/fixtures/labels.yaml`: with the fake internet (each fixture's
+  sender domain publishes SPF for its sending IP, as its Authentication-Results header says;
+  microsoft.com and paypal.com publish DMARC reject; MalwareBazaar knows EICAR), every fixture
+  gets its expected verdict. One weight changed: `hidden_text` 15 -> 25, because text hidden
+  to fool filters is deliberate evasion and fixture 11 (suspicious) scored only 22 before.
+  `qr_code.eml` needs zbar to be judged and is skipped without it.

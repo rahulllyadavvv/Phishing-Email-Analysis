@@ -41,7 +41,8 @@ class RdapResult:
     """Registration data for one domain.
 
     ``status``: ``ok`` (record found), ``not_found`` (the registry has no such domain),
-    ``reserved`` (a reserved name, not looked up) or ``error`` (``error`` says why).
+    ``reserved`` (a reserved name, not looked up), ``skipped`` (network disabled) or ``error``
+    (``error`` says why).
     """
 
     domain: str
@@ -143,6 +144,8 @@ async def lookup_domain(domain: str) -> RdapResult:
         result = await client.domain(domain)
     if result.status == EnrichmentStatus.ERROR:
         return RdapResult(domain, "error", error=result.error)
+    if result.status == EnrichmentStatus.NOT_CONFIGURED:
+        return RdapResult(domain, "skipped")
     details = result.details
     if details.get("rdap") == "not_found":
         return RdapResult(domain, "not_found", cached=result.cached)

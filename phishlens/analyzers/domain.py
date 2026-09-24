@@ -539,6 +539,9 @@ async def _check_mx(email: ParsedEmail, result: AnalyzerResult) -> None:
         return
     domain = email.from_addrs[0].domain
     mx = await dns_helper.mx(domain)
+    if mx.error == "offline":
+        result.raw["mx"] = {"domain": domain, "skipped_reason": "offline"}
+        return
     info: dict[str, Any] = {"domain": domain, "records": mx.records, "null_mx": False}
     result.raw["mx"] = info
     if mx.ok and not _is_null_mx(mx.records):

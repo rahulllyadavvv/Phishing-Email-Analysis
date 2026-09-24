@@ -25,6 +25,7 @@ module_caps:
   attachments: 70
   artifacts: 25
   tone: 30
+  nested: 60  # findings of forwarded (message/rfc822) emails
 
 thresholds:
   email: {suspicious: 30, malicious: 60}
@@ -128,7 +129,7 @@ weights:
   sandbox_suspicious: 20
   # artifacts
   tracking_pixel: 2
-  hidden_text: 15
+  hidden_text: 25
   hidden_filler_text: 10
   zero_width_characters: 15
   text_html_mismatch: 5

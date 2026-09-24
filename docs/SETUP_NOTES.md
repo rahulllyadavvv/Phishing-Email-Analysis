@@ -63,3 +63,9 @@ techniques at the time of writing) from the MITRE CTI GitHub repository into `da
 (gitignored). Without it, technique names and tactics come from the fallback table in
 `data/mitre_rules.yaml`, and `test_every_technique_exists_in_attack_data` is skipped. Loading
 the file takes a few seconds; it is cached per process.
+
+## P10.2: end-to-end tests
+
+`tests/test_pipeline.py` runs every fixture through the whole pipeline against a fake internet
+(fake DNS, respx for HTTP). `qr_code.eml` only reaches its expected "suspicious" verdict when
+the QR code can be decoded, so that case is skipped without zbar.

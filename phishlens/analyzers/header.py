@@ -43,6 +43,7 @@ from phishlens.config import get_settings
 from phishlens.data_loader import esp_for_domain
 from phishlens.enrichment.dkim_check import ArcResult, DkimSignature, verify_arc, verify_dkim
 from phishlens.enrichment.dmarc_check import fetch_dmarc
+from phishlens.enrichment.network import network_enabled
 from phishlens.enrichment.spf_check import check_spf
 from phishlens.models import (
     Address,
@@ -195,6 +196,9 @@ async def _check_spf(email: ParsedEmail, result: AnalyzerResult) -> None:
         result.raw["spf"] = {"result": None, "ip": ip, "skipped_reason": "no_identity"}
         return
 
+    if not network_enabled():
+        result.raw["spf"] = {"result": None, "ip": ip, "skipped_reason": "offline"}
+        return
     check = await check_spf(ip, mail_from, helo)
     result.raw["spf"] = check.to_dict()
     if check.result not in _SPF_FINDINGS:

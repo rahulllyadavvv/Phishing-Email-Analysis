@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     llm_tone_enabled: bool = False
     llm_model: str = "claude-opus-5"
 
+    # Pipeline: time limit per analyzer (seconds); the attachment analyzer gets its own, longer
+    # limit because it may wait for a sandbox report.
+    analyzer_timeout_seconds: float = Field(default=120.0, gt=0)
+    attachment_timeout_seconds: float = Field(default=900.0, gt=0)
+    nested_email_max_depth: int = Field(default=2, ge=0)
+
     # Scoring: "rule" (weights in data/weights.yaml) or "ml" (a scikit-learn model saved with
     # joblib at SCORER_MODEL_PATH; falls back to the rules when it cannot be loaded).
     scorer: str = "rule"

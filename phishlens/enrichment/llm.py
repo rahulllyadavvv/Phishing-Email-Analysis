@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from phishlens.config import get_settings
 from phishlens.enrichment.base import redact
+from phishlens.enrichment.network import network_enabled
 
 __all__ = [
     "LLM_SERVICE_NAME",
@@ -67,7 +68,7 @@ class LlmNotConfigured(LlmError):
 
 def llm_enabled() -> bool:
     settings = get_settings()
-    return settings.llm_tone_enabled and settings.is_enabled("llm")
+    return network_enabled() and settings.llm_tone_enabled and settings.is_enabled("llm")
 
 
 def _client() -> Any:

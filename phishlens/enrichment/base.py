@@ -33,6 +33,7 @@ from typing import Any, ClassVar
 import httpx
 
 from phishlens.config import Settings, get_settings
+from phishlens.enrichment.network import OFFLINE_REASON, network_enabled
 from phishlens.models import EnrichmentResult, EnrichmentStatus
 
 __all__ = [
@@ -227,7 +228,13 @@ class BaseClient:
 
     @property
     def enabled(self) -> bool:
+        """Configured and allowed to use the network (see ``enrichment.network.offline``)."""
+        if not network_enabled():
+            return False
         return not self.requires_key or self.settings.is_enabled(self.service)
+
+    def _not_configured_details(self) -> dict[str, Any]:
+        return {} if network_enabled() else {"reason": OFFLINE_REASON}
 
     def normalize(self, kind: str, query: str) -> str:
         """Normalize a query for caching. Override per service (e.g. lowercase domains)."""
@@ -293,7 +300,9 @@ class BaseClient:
         """
         normalized = self.normalize(kind, query)
         if not self.enabled:
-            return self.result(normalized, EnrichmentStatus.NOT_CONFIGURED)
+            return self.result(
+                normalized, EnrichmentStatus.NOT_CONFIGURED, details=self._not_configured_details()
+            )
         key = _cache_key(self.service, kind, normalized)
         now = time.time()
         cached = _cache_get(self.settings, key, now)
@@ -327,8 +336,10 @@ class BaseClient:
         """
         normalized = {q: self.normalize(kind, q) for q in queries}
         if not self.enabled:
+            details = self._not_configured_details()
             return {
-                q: self.result(n, EnrichmentStatus.NOT_CONFIGURED) for q, n in normalized.items()
+                q: self.result(n, EnrichmentStatus.NOT_CONFIGURED, details=details)
+                for q, n in normalized.items()
             }
         now = time.time()
         found: dict[str, EnrichmentResult] = {}

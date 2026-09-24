@@ -3,7 +3,8 @@
 All DNS lookups in PhishLens go through this module. Results are cached in memory and, when
 ``DNS_SQLITE_CACHE`` is on, in a SQLite file (``DNS_CACHE_PATH``) so repeated analyses do not hit
 the network again. Lookups never raise: failures come back as ``DnsResult.error`` with one of
-``nxdomain``, ``no_answer``, ``timeout``, ``no_nameservers``, ``unsupported_type`` or
+``nxdomain``, ``no_answer``, ``timeout``, ``no_nameservers``, ``unsupported_type``, ``offline``
+(network disabled, see ``enrichment.network``) or
 ``error: <details>``.
 
 Only definitive answers (records, ``nxdomain``, ``no_answer``) are cached. Timeouts and other
@@ -22,6 +23,7 @@ import dns.exception
 import dns.resolver
 
 from phishlens.config import get_settings
+from phishlens.enrichment.network import network_enabled
 
 __all__ = [
     "DnsResult", "SUPPORTED_TYPES", "a", "aaaa", "clear_cache", "mx", "ptr", "resolve", "txt"
@@ -134,6 +136,8 @@ async def resolve(name: str, rdtype: str) -> DnsResult:
         return DnsResult(name, rdtype, error="unsupported_type")
     if not name:
         return DnsResult(name, rdtype, error="error: empty name")
+    if not network_enabled():
+        return DnsResult(name, rdtype, error="offline")
 
     settings = get_settings()
     now = time.time()
