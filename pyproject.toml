@@ -69,6 +69,8 @@ include = ["phishlens*", "api*", "ui*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# oletools uses pyparsing's old camelCase API; nothing we can fix on our side.
+filterwarnings = ["ignore::DeprecationWarning:oletools.olevba"]
 
 [tool.ruff]
 line-length = 100

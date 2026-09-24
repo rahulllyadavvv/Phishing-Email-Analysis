@@ -267,3 +267,56 @@ async def test_reputation_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> No
     result = await attachments.analyze(_fixture("eicar_attachment.eml"), reputation=False)
     assert "reputation" not in result.raw["attachments"][0]
     assert result.errors == []
+
+
+# --- Office content analysis ---------------------------------------------------------------------
+
+
+def _template_docx() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", "<w:document/>")
+        archive.writestr(
+            "word/_rels/settings.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/attachedTemplate" Target="https://tpl.example.test/a.dotm" '
+            'TargetMode="External"/></Relationships>',
+        )
+    return buf.getvalue()
+
+
+async def test_office_findings_and_extracted_urls() -> None:
+    email = ParsedEmail(attachments=[make_attachment("offer.docx", _template_docx())])
+    result = await attachments.analyze(email)
+    finding = _ids(result)["remote_template_injection"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["files"][0]["target"] == "https://tpl.example.test/a.dotm"
+    assert [(u.url, u.source.value) for u in result.extracted_urls] == [
+        ("https://tpl.example.test/a.dotm", "attachment")
+    ]
+    [row] = result.raw["attachments"]
+    assert "remote_template_injection" in row["flags"]
+    assert row["office"]["external_relationships"][0]["type"] == "attachedTemplate"
+
+
+async def test_known_malicious_file_skips_content_analysis(monkeypatch) -> None:
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        return [_res("abusech", "malicious")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    email = ParsedEmail(attachments=[make_attachment("offer.docx", _template_docx())])
+    result = await attachments.analyze(email)
+    assert "remote_template_injection" not in _ids(result)
+    assert "office" not in result.raw["attachments"][0]
+    assert result.extracted_urls == []
+
+
+async def test_office_inside_zip_is_analyzed() -> None:
+    outer = _zip({"docs/offer.docx": _template_docx()})
+    result = await attachments.analyze(
+        ParsedEmail(attachments=[make_attachment("docs.zip", outer)])
+    )
+    entry = _ids(result)["remote_template_injection"].evidence["files"][0]
+    assert entry["file"] == "docs/offer.docx"

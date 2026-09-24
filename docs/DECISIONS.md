@@ -802,3 +802,37 @@ Plan reviewed and approved before building.
   `details`) and the report links.
 - With no API keys the lookups return `not_configured` without any network call, and the rows
   still carry the per-service results.
+
+## P6.3: Office and RTF static analysis
+
+- `phishlens/analyzers/office.py`: `analyze_office(filename, data, mime, passwords) ->
+  OfficeReport` (flags, URLs, info, errors). It never raises. The attachment analyzer runs it,
+  in a worker thread, on every file whose detected type is Office (OLE2, OOXML, macro-enabled)
+  or RTF, except files marked `deep_analysis_skipped` by hash reputation. Findings are grouped
+  per ID; `row["office"]` holds the descriptive info; URLs go to `extracted_urls` with source
+  `attachment`, deduplicated.
+- Encryption: `msoffcrypto` decrypts in memory with the body password candidates, then Excel's
+  built-in `VelvetSweatshop` (malware uses it so the file opens without a prompt). Analysis
+  continues on the decrypted bytes. `encrypted_office_document` (medium) records whether it was
+  decrypted and with which password source. msoffcrypto's own encrypt/decrypt round trip fails
+  on minimal test documents, so encryption is tested with a stand-in `OfficeFile` (the plan
+  allows mocking).
+- Macros: olevba (`detect_vba_macros`, `detect_xlm_macros`, `analyze_macros`) and mraptor on the
+  VBA source. `office_macro_autoexec` (high) needs VBA plus an AutoExec keyword.
+  `office_macro_suspicious_calls` (high) needs VBA plus any olevba "Suspicious" keyword; the
+  plan's key calls (Shell, CreateObject, URLDownloadToFile, WScript, PowerShell) are listed
+  separately as `key_calls`, and mraptor's verdict is included. `xlm_macro` (high) when olevba
+  finds Excel 4.0 macros. olevba IOC URLs become extracted URLs. Real olevba is tested on a
+  harmless plain-text VBA module; XLM uses a mocked scan result.
+- OOXML: every `.rels` part (at most 1 MB) is parsed with ElementTree (the bundled expat
+  protects against entity-expansion bombs). External relationships: `attachedTemplate` ->
+  `remote_template_injection` (high); oleObject, frame, subDocument, package, external
+  workbook links and controls -> `office_external_link` (medium); hyperlinks only produce
+  extracted URLs, since links in documents are normal. `embeddings/` parts and OLE
+  `\x01Ole10Native` streams are listed in `office.embedded_objects` without a finding (the
+  embedded payloads are not extracted as separate files yet).
+- RTF: rtfobj lists embedded objects. `rtf_embedded_object` (medium) lists the class names,
+  package file names and whether an object is Equation Editor (CVE-2017-11882), so the report
+  can call that out. `http(s)` URLs in the RTF text become extracted URLs.
+- oletools loggers are silenced (problems come back in `errors`), and pytest ignores the
+  pyparsing deprecation warnings raised inside `oletools.olevba`.

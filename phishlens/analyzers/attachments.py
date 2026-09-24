@@ -12,6 +12,10 @@ Hash reputation (``reputation=True``): every non-empty file's SHA-256 goes throu
 ``attachment_known_malicious`` and is marked ``deep_analysis_skipped``, so the later content and
 sandbox stages leave it alone: the verdict is already certain.
 
+Content analysis (files not skipped above): Office and RTF files go through
+``office.analyze_office`` (macros, XLM, remote templates, external links, embedded objects,
+encryption). URLs found inside files are returned in ``extracted_urls`` (source "attachment").
+
 Nothing is executed, opened or rendered. ``raw["attachments"]`` has one row per file and
 ``raw["archive_events"]`` what happened while unpacking. Findings are grouped per ID.
 """
@@ -27,6 +31,7 @@ from bs4 import BeautifulSoup
 
 from phishlens.analyzers.archives import Budget, PasswordCandidate, unpack
 from phishlens.analyzers.filetype import BIDI_CONTROLS, detect_type, filename_checks
+from phishlens.analyzers.office import analyze_office, is_office_type
 from phishlens.config import get_settings
 from phishlens.data_loader import password_hints
 from phishlens.enrichment.lookup import hash_reputation
@@ -38,6 +43,8 @@ from phishlens.models import (
     Finding,
     ParsedEmail,
     Severity,
+    UrlRef,
+    UrlSource,
 )
 
 MODULE = "attachments"
@@ -96,6 +103,45 @@ FINDINGS: dict[str, tuple[Severity, str, str]] = {
         Severity.CRITICAL,
         "Attachment is known malware",
         "Threat-intelligence services identify this file (by its hash) as malicious.",
+    ),
+    "office_macro_autoexec": (
+        Severity.HIGH,
+        "Office macro runs automatically",
+        "The document contains VBA macros that start on their own when it is opened.",
+    ),
+    "office_macro_suspicious_calls": (
+        Severity.HIGH,
+        "Office macro uses suspicious functions",
+        "The macro code calls functions used to run programs, download files or hide "
+        "activity (Shell, CreateObject, URLDownloadToFile, WScript, PowerShell, ...).",
+    ),
+    "xlm_macro": (
+        Severity.HIGH,
+        "Excel 4.0 (XLM) macros",
+        "The workbook contains legacy Excel 4.0 macros, a favourite of malware because many "
+        "tools do not inspect them.",
+    ),
+    "remote_template_injection": (
+        Severity.HIGH,
+        "Document loads a remote template",
+        "The document points to a template on the internet that Office downloads when it "
+        "opens: a way to fetch malicious macros after the file has passed the filters.",
+    ),
+    "office_external_link": (
+        Severity.MEDIUM,
+        "Document links to external content",
+        "The document refers to external objects or files that Office may load when opened.",
+    ),
+    "rtf_embedded_object": (
+        Severity.MEDIUM,
+        "RTF document contains embedded objects",
+        "Embedded OLE objects in RTF files are a common exploit vehicle (for example the "
+        "Equation Editor, CVE-2017-11882).",
+    ),
+    "encrypted_office_document": (
+        Severity.MEDIUM,
+        "Password-protected Office document",
+        "The document is encrypted, which hides its content from mail filters.",
     ),
     "encrypted_archive_unopened": (
         Severity.HIGH,
@@ -297,6 +343,34 @@ async def _check_reputation(result: AnalyzerResult) -> None:
         _add_findings(result, {"attachment_known_malicious": malicious})
 
 
+async def _check_content(
+    files: list[Attachment], passwords: list[str], result: AnalyzerResult
+) -> None:
+    """Deep static analysis per file type (Office/RTF for now), skipping known-bad files."""
+    rows = result.raw.get("attachments", [])
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    seen_urls = {ref.url for ref in result.extracted_urls}
+    for file, row in zip(files, rows, strict=True):
+        if row.get("deep_analysis_skipped") or not is_office_type(file.detected_type):
+            continue
+        report = await asyncio.to_thread(
+            analyze_office, file.filename, file.data, file.detected_type, passwords
+        )
+        row["office"] = report.info
+        for error in report.errors:
+            result.errors.append(f"office: {row['safe_name']}: {error}")
+        for flag, details in report.flags:
+            row["flags"].append(flag)
+            grouped.setdefault(flag, []).append(
+                {"file": row["safe_name"], "sha256": file.sha256, **details}
+            )
+        for url in report.urls:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                result.extracted_urls.append(UrlRef(url=url, source=UrlSource.ATTACHMENT))
+    _add_findings(result, grouped)
+
+
 async def analyze(
     email: ParsedEmail,
     context: dict[str, AnalyzerResult] | None = None,
@@ -312,6 +386,8 @@ async def analyze(
         result.skipped = True
         result.raw["attachments"] = []
         return result
+    files: list[Attachment] = []
+    passwords: list[str] = []
     try:
         passwords = body_passwords(email)
         result.raw["password_candidates"] = passwords
@@ -324,5 +400,10 @@ async def analyze(
             await _check_reputation(result)
         except Exception as exc:
             result.errors.append(f"reputation: {type(exc).__name__}: {exc}")
+    if files:
+        try:
+            await _check_content(files, passwords, result)
+        except Exception as exc:
+            result.errors.append(f"content: {type(exc).__name__}: {exc}")
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result
