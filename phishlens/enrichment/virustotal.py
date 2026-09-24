@@ -35,7 +35,14 @@ _PATHS = {
 # Attributes copied into ``details`` per kind, when present.
 _DETAIL_FIELDS = {
     "url": ("last_final_url", "title", "categories", "tags"),
-    "file": ("meaningful_name", "type_description", "size", "names", "tags"),
+    "file": (
+        "meaningful_name",
+        "type_description",
+        "size",
+        "names",
+        "tags",
+        "popular_threat_classification",
+    ),
     "domain": ("categories", "creation_date", "registrar", "tags"),
     "ip": ("country", "as_owner", "asn", "network", "tags"),
 }

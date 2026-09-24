@@ -10,7 +10,7 @@ import pytest
 
 from phishlens.analyzers import attachments
 from phishlens.config import get_settings
-from phishlens.models import ParsedEmail, Severity
+from phishlens.models import EnrichmentResult, ParsedEmail, Severity
 from phishlens.parser import parse_email
 from phishlens.parser.attachments import make_attachment
 
@@ -149,4 +149,121 @@ async def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("name", ALL_FIXTURES)
 async def test_every_fixture(name: str) -> None:
     result = await attachments.analyze(_fixture(name))
+    assert result.errors == []
+
+
+# --- Hash reputation ----------------------------------------------------------------------------
+
+EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+
+
+async def test_fixture_14_eicar_mocked_malwarebazaar_hit(
+    respx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real lookup chain: MalwareBazaar says malicious, so VirusTotal is never asked."""
+    from phishlens.enrichment import abusech, virustotal
+
+    monkeypatch.setenv("ABUSECH_API_KEY", "fake-abusech")
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "fake-vt")
+    get_settings.cache_clear()
+    respx_mock.post(abusech.MALWAREBAZAAR_API).respond(
+        200,
+        json={
+            "query_status": "ok",
+            "data": [{"sha256_hash": EICAR_SHA256, "signature": "EICAR-Test-File"}],
+        },
+    )
+    vt = respx_mock.get(url__startswith=virustotal.API_URL).respond(404)
+
+    result = await attachments.analyze(_fixture("eicar_attachment.eml"))
+    finding = _ids(result)["attachment_known_malicious"]
+    assert finding.severity == Severity.CRITICAL
+    [entry] = finding.evidence["files"]
+    assert entry["file"] == "eicar.com" and entry["sha256"] == EICAR_SHA256
+    assert entry["services"] == ["abusech"]
+    assert entry["families"] == ["EICAR-Test-File"]
+    assert entry["links"] == [f"https://bazaar.abuse.ch/sample/{EICAR_SHA256}/"]
+    [row] = result.raw["attachments"]
+    assert row["reputation_verdict"] == "malicious"
+    assert row["deep_analysis_skipped"] is True
+    assert row["skip_reason"] == "known malicious by hash reputation"
+    assert vt.call_count == 0
+
+
+def _res(service: str, status: str, **fields) -> EnrichmentResult:
+    return EnrichmentResult(service=service, query="q", status=status, **fields)
+
+
+async def test_virustotal_detections_and_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        return [
+            _res("abusech", "unknown"),
+            _res(
+                "virustotal",
+                "malicious",
+                detections=61,
+                total_engines=70,
+                details={
+                    "popular_threat_classification": {"suggested_threat_label": "trojan.agent"}
+                },
+            ),
+        ]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    result = await attachments.analyze(_fixture("double_extension.eml"))
+    [entry] = _ids(result)["attachment_known_malicious"].evidence["files"]
+    assert entry["detections"] == {"virustotal": "61/70"}
+    assert entry["families"] == ["trojan.agent"]
+
+
+async def test_only_malicious_files_are_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked_up: list[str] = []
+    bad = make_attachment("bad.exe", b"MZ bad")
+    good = make_attachment("good.txt", b"fine")
+    empty = make_attachment("empty.txt", b"")
+
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        looked_up.append(sha256)
+        status = "malicious" if sha256 == bad.sha256 else "unknown"
+        return [_res("abusech", status)]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    email = ParsedEmail(attachments=[bad, good, empty, bad.model_copy()])
+    result = await attachments.analyze(email)
+    rows = result.raw["attachments"]
+    assert [r["deep_analysis_skipped"] for r in rows] == [True, False, False, True]
+    assert rows[2]["reputation"] == [] and rows[2]["reputation_verdict"] is None
+    assert sorted(looked_up) == sorted([bad.sha256, good.sha256])  # deduplicated, empty skipped
+    assert _ids(result)["attachment_known_malicious"].evidence["count"] == 2
+
+
+async def test_unpacked_files_are_looked_up_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked_up: list[str] = []
+
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        looked_up.append(sha256)
+        return [_res("abusech", "unknown")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    result = await attachments.analyze(_fixture("zip_attachment.eml"))
+    assert {r["sha256"] for r in result.raw["attachments"]} == set(looked_up)
+    assert len(looked_up) == 2
+
+
+async def test_no_keys_all_not_configured() -> None:
+    result = await attachments.analyze(_fixture("eicar_attachment.eml"))
+    [row] = result.raw["attachments"]
+    assert row["reputation_verdict"] == "not_configured"
+    assert [r["service"] for r in row["reputation"]] == ["abusech", "virustotal"]
+    assert "attachment_known_malicious" not in _ids(result)
+    assert result.errors == []
+
+
+async def test_reputation_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom(sha256: str) -> list:
+        raise AssertionError("must not be called")
+
+    monkeypatch.setattr(attachments, "hash_reputation", boom)
+    result = await attachments.analyze(_fixture("eicar_attachment.eml"), reputation=False)
+    assert "reputation" not in result.raw["attachments"][0]
     assert result.errors == []

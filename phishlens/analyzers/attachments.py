@@ -7,6 +7,11 @@ and the analyst convention ``infected``. Every file, top-level or extracted, is 
 checked for type mismatches, double extensions, bidirectional control characters,
 whitespace-padded extensions and high-risk types.
 
+Hash reputation (``reputation=True``): every non-empty file's SHA-256 goes through
+``lookup.hash_reputation`` (MalwareBazaar -> VirusTotal). A known-malicious file gets
+``attachment_known_malicious`` and is marked ``deep_analysis_skipped``, so the later content and
+sandbox stages leave it alone: the verdict is already certain.
+
 Nothing is executed, opened or rendered. ``raw["attachments"]`` has one row per file and
 ``raw["archive_events"]`` what happened while unpacking. Findings are grouped per ID.
 """
@@ -24,7 +29,16 @@ from phishlens.analyzers.archives import Budget, PasswordCandidate, unpack
 from phishlens.analyzers.filetype import BIDI_CONTROLS, detect_type, filename_checks
 from phishlens.config import get_settings
 from phishlens.data_loader import password_hints
-from phishlens.models import AnalyzerResult, Attachment, Finding, ParsedEmail, Severity
+from phishlens.enrichment.lookup import hash_reputation
+from phishlens.models import (
+    AnalyzerResult,
+    Attachment,
+    EnrichmentResult,
+    EnrichmentStatus,
+    Finding,
+    ParsedEmail,
+    Severity,
+)
 
 MODULE = "attachments"
 
@@ -33,6 +47,8 @@ __all__ = ["DEFAULT_PASSWORDS", "MODULE", "analyze", "body_passwords", "prepare_
 # Tried after the body candidates: the usual password for shared malware samples.
 DEFAULT_PASSWORDS = ("infected",)
 _STRIP = "\"'“”‘’()[]{}<>:;,.!?*`"
+MAX_CONCURRENT_LOOKUPS = 4
+STATUS_ORDER = ("malicious", "suspicious", "clean", "unknown", "error", "not_configured")
 
 # finding id -> (severity, title, description)
 FINDINGS: dict[str, tuple[Severity, str, str]] = {
@@ -75,6 +91,11 @@ FINDINGS: dict[str, tuple[Severity, str, str]] = {
         "Encrypted archive with the password in the email",
         "The archive is password-protected so scanners cannot look inside, and the password "
         "is given in the message: a common malware delivery trick.",
+    ),
+    "attachment_known_malicious": (
+        Severity.CRITICAL,
+        "Attachment is known malware",
+        "Threat-intelligence services identify this file (by its hash) as malicious.",
     ),
     "encrypted_archive_unopened": (
         Severity.HIGH,
@@ -211,10 +232,80 @@ def _static_file_checks(
     _add_findings(result, grouped)
 
 
+def _families(results: list[EnrichmentResult]) -> list[str]:
+    names: list[str] = []
+    for r in results:
+        if r.status != EnrichmentStatus.MALICIOUS:
+            continue
+        label = r.details.get("signature") or (
+            (r.details.get("popular_threat_classification") or {}).get("suggested_threat_label")
+        )
+        if label and str(label) not in names:
+            names.append(str(label))
+    return names
+
+
+def _summary(result: EnrichmentResult) -> dict[str, Any]:
+    return {
+        "service": result.service,
+        "status": result.status.value,
+        "detections": result.detections,
+        "total_engines": result.total_engines,
+        "cached": result.cached,
+        "link": result.link,
+        "error": result.error,
+    }
+
+
+async def _check_reputation(result: AnalyzerResult) -> None:
+    rows = result.raw.get("attachments", [])
+    hashes = list(dict.fromkeys(r["sha256"] for r in rows if r["size"] > 0))
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_LOOKUPS)
+
+    async def lookup(sha256: str) -> list[EnrichmentResult]:
+        async with semaphore:
+            return await hash_reputation(sha256)
+
+    answers = dict(zip(hashes, await asyncio.gather(*(lookup(h) for h in hashes)), strict=True))
+    malicious: list[dict[str, Any]] = []
+    for row in rows:
+        results = answers.get(row["sha256"], [])
+        row["reputation"] = [_summary(r) for r in results]
+        statuses = {r.status.value for r in results}
+        row["reputation_verdict"] = next((s for s in STATUS_ORDER if s in statuses), None)
+        row["deep_analysis_skipped"] = row["reputation_verdict"] == "malicious"
+        if row["deep_analysis_skipped"]:
+            row["skip_reason"] = "known malicious by hash reputation"
+            malicious.append(
+                {
+                    "file": row["safe_name"],
+                    "sha256": row["sha256"],
+                    "parent": row["parent"],
+                    "services": [
+                        r.service for r in results if r.status == EnrichmentStatus.MALICIOUS
+                    ],
+                    "detections": {
+                        r.service: f"{r.detections}/{r.total_engines}"
+                        for r in results
+                        if r.total_engines
+                    },
+                    "families": _families(results),
+                    "links": [r.link for r in results if r.link],
+                }
+            )
+    if malicious:
+        _add_findings(result, {"attachment_known_malicious": malicious})
+
+
 async def analyze(
-    email: ParsedEmail, context: dict[str, AnalyzerResult] | None = None
+    email: ParsedEmail,
+    context: dict[str, AnalyzerResult] | None = None,
+    reputation: bool = True,
 ) -> AnalyzerResult:
-    """Analyze the email's attachments. Never raises; errors go into ``errors``."""
+    """Analyze the email's attachments. Never raises; errors go into ``errors``.
+
+    ``reputation=False`` skips the hash lookups (no network at all).
+    """
     start = time.perf_counter()
     result = AnalyzerResult(module=MODULE)
     if not email.attachments:
@@ -228,5 +319,10 @@ async def analyze(
         _static_file_checks(files, events, result)
     except Exception as exc:
         result.errors.append(f"attachments: {type(exc).__name__}: {exc}")
+    if reputation:
+        try:
+            await _check_reputation(result)
+        except Exception as exc:
+            result.errors.append(f"reputation: {type(exc).__name__}: {exc}")
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result

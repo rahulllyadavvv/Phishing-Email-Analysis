@@ -782,3 +782,23 @@ Plan reviewed and approved before building.
   sha256, flags). `raw["archive_events"]` and `raw["password_candidates"]` are also recorded. A
   corrupt archive is an entry in `errors` (`unpack: <name>: ...`). An email without attachments
   gives `skipped = True`.
+
+## P6.2: Hash reputation
+
+- `analyze(email, context=None, reputation=True)`: every non-empty file (top-level and unpacked)
+  is looked up once per unique SHA-256 with `lookup.hash_reputation` (MalwareBazaar ->
+  VirusTotal, stopping at the first malicious result), at most 4 at a time. Empty files are
+  skipped: the empty-file hash is meaningless. `reputation=False` means no network at all.
+- Each `raw["attachments"]` row gets `reputation` (per service: status, detections, engines,
+  cached, link, error), `reputation_verdict` (worst status, or `None` when not looked up) and
+  `deep_analysis_skipped`. When that is true, `skip_reason` says why. The later content stages
+  (P6.3-P6.5) and the sandbox (P6.6) must skip rows with `deep_analysis_skipped`: the verdict is
+  already certain, and analyzing known malware again only costs time and sandbox quota.
+  Filename checks (P6.1) have already run for every file and stay.
+- `attachment_known_malicious` (critical), one finding listing every such file with the services
+  that flagged it, detection counts (`"61/70"` per service with engine counts), malware family
+  names (MalwareBazaar `signature`, VirusTotal
+  `popular_threat_classification.suggested_threat_label`, which the VT client now keeps in
+  `details`) and the report links.
+- With no API keys the lookups return `not_configured` without any network call, and the rows
+  still carry the per-service results.
