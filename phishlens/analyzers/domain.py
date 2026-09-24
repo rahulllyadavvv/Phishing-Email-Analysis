@@ -6,6 +6,11 @@ answer while showing a trusted From. The display name is searched for brand keyw
 ``data/brand_registry.yaml``; a brand name shown over an address that is not one of the brand's
 domains (or is free webmail) is display-name spoofing.
 
+``check_lookalike(domain)`` (also used by the URL analyzer) compares a domain with every brand's
+legitimate domains: homoglyphs and IDN/punycode (via the "skeleton" built from
+``data/confusables.yaml``), typos (Damerau-Levenshtein on skeletons), combosquatting (a brand
+label plus other words), TLD swaps and a brand used as a subdomain of another domain.
+
 ``raw["domain_table"]`` has one row per sender address for the report.
 """
 
@@ -13,24 +18,45 @@ from __future__ import annotations
 
 import re
 import time
+import unicodedata
+from dataclasses import asdict, dataclass
 from functools import cache
 from typing import Any
+
+from rapidfuzz.distance import DamerauLevenshtein
 
 from phishlens.data_loader import (
     Brand,
     BrandRegistry,
     brand_for_domain,
     brand_registry,
+    confusables,
     domain_matches,
     esp_for_domain,
     is_free_webmail,
     is_risky_tld,
 )
 from phishlens.models import Address, AnalyzerResult, Finding, ParsedEmail, Severity
+from phishlens.parser.headers import org_domain
 
 MODULE = "domain"
 
-__all__ = ["MODULE", "BrandMention", "analyze", "find_brand_mentions"]
+__all__ = [
+    "MODULE",
+    "BrandMention",
+    "LookalikeMatch",
+    "analyze",
+    "check_lookalike",
+    "decode_idn",
+    "find_brand_mentions",
+    "skeleton",
+]
+
+# Strongest kind first; used to keep one match per brand.
+LOOKALIKE_KINDS = ("homoglyph", "typosquat", "combosquat", "tld_swap", "brand_in_subdomain")
+MIN_TYPO_LABEL = 6  # shorter brand labels only match via homoglyphs (too many real words)
+MIN_SUBSTRING_LABEL = 6  # shorter labels are only matched as a whole hyphen-separated token
+MIN_LABEL = 3
 
 
 class BrandMention:
@@ -82,6 +108,217 @@ def find_brand_mentions(text: str) -> list[BrandMention]:
                 mentions.append(BrandMention(brand, keyword))
                 break
     return mentions
+
+
+@dataclass(frozen=True)
+class LookalikeMatch:
+    """A domain that imitates one of a brand's legitimate domains."""
+
+    domain: str
+    decoded: str
+    brand: str
+    legitimate_domain: str
+    kind: str
+    distance: int = 0
+    token: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def decode_idn(domain: str) -> str:
+    """Decode punycode (``xn--``) labels to Unicode; labels that fail to decode are kept."""
+    labels = []
+    for label in domain.split("."):
+        if label.startswith("xn--"):
+            try:
+                label = label.encode("ascii").decode("idna")
+            except UnicodeError:
+                pass
+        labels.append(label)
+    return ".".join(labels)
+
+
+def skeleton(text: str) -> str:
+    """Reduce ``text`` to its lookalike skeleton (``paypa1`` and ``paypal`` give the same)."""
+    table = confusables()
+    text = unicodedata.normalize("NFKC", text.lower())
+    out = "".join(table.characters.get(ch, ch) for ch in text)
+    for sequence, replacement in table.sequences.items():
+        out = out.replace(sequence, replacement)
+    return out
+
+
+def _split(domain: str) -> tuple[str, str, str]:
+    """Return ``(subdomain, label, suffix)`` for an ASCII domain."""
+    registered = org_domain(domain) or domain
+    label, _, suffix = registered.partition(".")
+    subdomain = domain[: -len(registered)].rstrip(".") if domain != registered else ""
+    return subdomain, label, suffix
+
+
+@dataclass(frozen=True)
+class _Target:
+    brand: str
+    domain: str
+    label: str
+    suffix: str
+    skeleton: str
+    generic: bool = False
+
+
+@cache
+def _targets(registry: BrandRegistry) -> tuple[_Target, ...]:
+    targets = []
+    for brand in registry.brands:
+        for legit in brand.legitimate_domains:
+            _, label, suffix = _split(legit)
+            if len(label) >= MIN_LABEL:
+                generic = label in registry.generic_labels
+                targets.append(
+                    _Target(brand.name, legit, label, suffix, skeleton(label), generic)
+                )
+    return tuple(targets)
+
+
+def _typo_threshold(label: str) -> int:
+    if len(label) < MIN_TYPO_LABEL:
+        return 0
+    return 2 if len(label) >= 9 else 1
+
+
+def _match_label(label: str, target: _Target) -> tuple[str, int] | None:
+    """Compare one label (or hyphen token) with a brand label: exact, homoglyph or typo."""
+    if label == target.label:
+        return "exact", 0
+    label_skeleton = skeleton(label)
+    if label_skeleton == target.skeleton:
+        return "homoglyph", 0
+    limit = _typo_threshold(target.label)
+    if limit:
+        distance = DamerauLevenshtein.distance(label_skeleton, target.skeleton)
+        if distance <= limit:
+            return "typosquat", distance
+    return None
+
+
+def _match(domain: str, decoded: str, target: _Target) -> LookalikeMatch | None:
+    subdomain, label, suffix = _split(domain)
+    unicode_label = decode_idn(label)
+
+    def found(kind: str, distance: int = 0, token: str | None = None) -> LookalikeMatch:
+        return LookalikeMatch(
+            domain, decoded, target.brand, target.domain, kind, distance, token
+        )
+
+    if target.generic:
+        # Everyday words: only a disguised copy of the whole label counts.
+        homoglyph = unicode_label != target.label and skeleton(unicode_label) == target.skeleton
+        return found("homoglyph") if homoglyph else None
+
+    whole = _match_label(unicode_label, target)
+    if whole:
+        kind, distance = whole
+        if kind == "exact":
+            return found("tld_swap") if suffix != target.suffix else None
+        return found(kind, distance)
+
+    tokens = [t for t in re.split(r"[-_]+", unicode_label) if t]
+    if len(tokens) > 1:
+        for token in tokens:
+            if _match_label(token, target):
+                return found("combosquat", token=token)
+    if len(target.label) >= MIN_SUBSTRING_LABEL and target.skeleton in skeleton(unicode_label):
+        return found("combosquat", token=target.label)
+
+    if subdomain:
+        sub_tokens = set(re.split(r"[.\-_]+", decode_idn(subdomain)))
+        if target.domain in subdomain or (
+            len(target.label) >= 4 and target.label in sub_tokens
+        ):
+            return found("brand_in_subdomain", token=target.label)
+    return None
+
+
+def check_lookalike(domain: str) -> list[LookalikeMatch]:
+    """Return lookalike matches for ``domain``, at most one per brand (the strongest kind).
+
+    Accepts ASCII/punycode or Unicode domains. A domain that is (a subdomain of) any brand's
+    legitimate domain returns no matches.
+    """
+    domain = domain.strip().rstrip(".").lower()
+    if not domain or "." not in domain:
+        return []
+    try:
+        ascii_domain = domain.encode("idna").decode("ascii") if not domain.isascii() else domain
+    except UnicodeError:
+        ascii_domain = domain
+    registry = brand_registry()
+    if any(domain_matches(ascii_domain, b.legitimate_domains) for b in registry.brands):
+        return []
+    decoded = decode_idn(ascii_domain)
+    best: dict[str, LookalikeMatch] = {}
+    for target in _targets(registry):
+        match = _match(ascii_domain, decoded, target)
+        if match is None:
+            continue
+        current = best.get(match.brand)
+        rank = (LOOKALIKE_KINDS.index(match.kind), match.distance)
+        if current is None or rank < (LOOKALIKE_KINDS.index(current.kind), current.distance):
+            best[match.brand] = match
+    return sorted(best.values(), key=lambda m: (LOOKALIKE_KINDS.index(m.kind), m.brand))
+
+
+def _is_idn(domain: str) -> bool:
+    return not domain.isascii() or any(label.startswith("xn--") for label in domain.split("."))
+
+
+def _check_lookalikes(email: ParsedEmail, result: AnalyzerResult) -> None:
+    roles: dict[str, list[str]] = {}
+    addresses = [("from", a) for a in email.from_addrs]
+    if email.return_path:
+        addresses.append(("return_path", email.return_path))
+    addresses += [("reply_to", a) for a in email.reply_to]
+    if email.sender:
+        addresses.append(("sender", email.sender))
+    for role, addr in addresses:
+        if addr.domain and role not in roles.setdefault(addr.domain, []):
+            roles[addr.domain].append(role)
+
+    lookalikes: dict[str, list[dict[str, Any]]] = {}
+    for sender_domain, domain_roles in roles.items():
+        matches = check_lookalike(sender_domain)
+        if matches:
+            lookalikes[sender_domain] = [m.to_dict() for m in matches]
+            brands_text = ", ".join(sorted({m.brand for m in matches}))
+            result.findings.append(
+                _finding(
+                    "lookalike_domain",
+                    Severity.HIGH,
+                    f"Lookalike domain imitating {brands_text}",
+                    f"'{matches[0].decoded}' ({', '.join(domain_roles)}) imitates "
+                    f"'{matches[0].legitimate_domain}' ({matches[0].kind}).",
+                    {
+                        "domain": sender_domain,
+                        "decoded": matches[0].decoded,
+                        "roles": domain_roles,
+                        "matches": lookalikes[sender_domain],
+                    },
+                )
+            )
+        if _is_idn(sender_domain):
+            decoded = decode_idn(sender_domain)
+            result.findings.append(
+                _finding(
+                    "punycode_domain",
+                    Severity.HIGH if matches else Severity.MEDIUM,
+                    "Internationalized (punycode) sender domain",
+                    f"'{sender_domain}' is an internationalized domain shown as '{decoded}'."
+                    + (" It imitates a known brand." if matches else ""),
+                    {"domain": sender_domain, "decoded": decoded, "roles": domain_roles},
+                )
+            )
+    result.raw["lookalikes"] = lookalikes
 
 
 def _row(role: str, addr: Address, from_addr: Address | None) -> dict[str, Any]:
@@ -216,7 +453,12 @@ async def analyze(email: ParsedEmail) -> AnalyzerResult:
     """Analyze sender domains. Never raises; errors go into ``AnalyzerResult.errors``."""
     start = time.perf_counter()
     result = AnalyzerResult(module=MODULE)
-    for name, check in (("consistency", _check_consistency), ("display_name", _check_display_name)):
+    checks = (
+        ("consistency", _check_consistency),
+        ("display_name", _check_display_name),
+        ("lookalike", _check_lookalikes),
+    )
+    for name, check in checks:
         try:
             check(email, result)
         except Exception as exc:

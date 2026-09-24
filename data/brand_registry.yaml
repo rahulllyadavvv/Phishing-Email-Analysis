@@ -8,12 +8,19 @@
 #                       are covered automatically (accounts.google.com matches google.com).
 #   esp_domains:        bulk email providers the brand is known to send through (optional).
 #
+# "generic_labels" are brand domain labels that are also everyday words (office.com, live.com).
+# Lookalike detection only matches them through homoglyphs (0ffice.com), never as a word inside
+# another domain (home-office.example) or via typos/TLD swaps. Add a label here when it causes
+# false positives.
+#
 # "organization" lists your own company's domains, so mail claiming to be from your own
 # organization can be checked the same way. Leave it empty if not needed.
 
 organization:
   name: ""
   domains: []
+
+generic_labels: [live, office, windows, bing, azure, outlook, mac, meta, chase, zoom, msn, jio]
 
 brands:
   - name: Microsoft

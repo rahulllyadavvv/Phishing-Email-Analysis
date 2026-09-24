@@ -1,0 +1,95 @@
+# Characters that look alike, used to detect lookalike domains (e.g. "paypa1", Cyrillic "аpple").
+# Both the suspicious domain and the brand domains are reduced to a "skeleton" with these maps,
+# then compared. To extend: add "character: ascii replacement" under "characters" (one
+# character on the left), or "sequence: replacement" under "sequences" (applied after the
+# characters, left to right). Keep replacements lowercase ASCII. Mapping i and 1 to l is deliberate: all three look
+# alike in many fonts.
+sequences:
+  rn: m
+  vv: w
+  cl: d
+characters:
+  # digits and symbols
+  "0": o
+  "1": l
+  "3": e
+  "4": a
+  "5": s
+  "7": t
+  "8": b
+  "9": g
+  "$": s
+  "@": a
+  "|": l
+  "!": l
+  # Latin lookalikes
+  i: l
+  ı: l
+  ł: l
+  ɡ: g
+  ß: b
+  à: a
+  á: a
+  â: a
+  ã: a
+  ä: a
+  å: a
+  ç: c
+  è: e
+  é: e
+  ê: e
+  ë: e
+  ì: l
+  í: l
+  î: l
+  ï: l
+  ñ: n
+  ò: o
+  ó: o
+  ô: o
+  õ: o
+  ö: o
+  ø: o
+  ù: u
+  ú: u
+  û: u
+  ü: u
+  ý: y
+  ÿ: y
+  # Cyrillic
+  а: a
+  в: b
+  е: e
+  ё: e
+  һ: h
+  і: l
+  ї: l
+  ј: j
+  к: k
+  ӏ: l
+  м: m
+  н: h
+  о: o
+  р: p
+  с: c
+  ѕ: s
+  т: t
+  у: y
+  х: x
+  ԁ: d
+  ԛ: q
+  ԝ: w
+  # Greek
+  α: a
+  β: b
+  ε: e
+  η: n
+  ι: l
+  κ: k
+  ν: v
+  ο: o
+  ρ: p
+  τ: t
+  υ: u
+  χ: x
+  ω: w

@@ -22,12 +22,14 @@ __all__ = [
     "DATA_DIR",
     "Brand",
     "BrandRegistry",
+    "Confusables",
     "Esp",
     "Organization",
     "brand_for_domain",
     "brand_registry",
     "brands",
     "clear_cache",
+    "confusables",
     "domain_matches",
     "esp_for_domain",
     "esps",
@@ -105,6 +107,7 @@ class Organization(_Model):
 
 class BrandRegistry(_Model):
     organization: Organization = Organization()
+    generic_labels: Names = ()
     brands: tuple[Brand, ...]
 
 
@@ -124,6 +127,28 @@ class _TldList(_Model):
     def _strip_dots(cls, value: Any) -> Any:
         if isinstance(value, list | tuple):
             return tuple(str(t).strip().strip(".").lower() for t in value if str(t).strip())
+        return value
+
+
+class Confusables(_Model):
+    """Lookalike maps: ``sequences`` (multi-character, applied first) and ``characters``."""
+
+    sequences: dict[str, str] = {}
+    characters: dict[str, str]
+
+    @field_validator("sequences", "characters", mode="before")
+    @classmethod
+    def _stringify(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(k): str(v).lower() for k, v in value.items()}
+        return value
+
+    @field_validator("characters")
+    @classmethod
+    def _single_characters(cls, value: dict[str, str]) -> dict[str, str]:
+        bad = [k for k in value if len(k) != 1]
+        if bad:
+            raise ValueError(f"character keys must be one character: {bad}")
         return value
 
 
@@ -165,6 +190,11 @@ def shortener_domains() -> frozenset[str]:
     return frozenset(_DomainList.model_validate(load_yaml("shorteners.yaml")).domains)
 
 
+@cache
+def confusables() -> Confusables:
+    return Confusables.model_validate(load_yaml("confusables.yaml"))
+
+
 def esp_for_domain(domain: str | None) -> Esp | None:
     """Return the ESP that ``domain`` belongs to, else ``None``."""
     for esp in esps():
@@ -196,5 +226,5 @@ def is_risky_tld(domain: str | None) -> bool:
 
 def clear_cache() -> None:
     for fn in (load_yaml, esps, brand_registry, free_webmail_domains, risky_tlds,
-               shortener_domains):
+               shortener_domains, confusables):
         fn.cache_clear()

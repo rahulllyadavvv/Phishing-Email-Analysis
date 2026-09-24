@@ -184,3 +184,98 @@ async def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_every_fixture(name: str) -> None:
     result = await domain.analyze(parse_email((FIXTURES / name).read_bytes()))
     assert result.errors == []
+
+
+# --- Lookalike domains ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("candidate", "brand", "kind"),
+    [
+        ("micros0ft.com", "Microsoft", "homoglyph"),
+        ("paypa1.com", "PayPal", "homoglyph"),
+        ("xn--pple-43d.com", "Apple", "homoglyph"),  # Cyrillic "а" + "pple"
+        ("xn--80ak6aa92e.com", "Apple", "homoglyph"),  # fully Cyrillic "аррӏе"
+        ("rnicrosoft.com", "Microsoft", "homoglyph"),
+        ("paypal-secure-login.net", "PayPal", "combosquat"),
+        ("microsoft-support-login.example", "Microsoft", "combosquat"),
+        ("micros0ft-support.example", "Microsoft", "combosquat"),
+        ("paypalsecure.com", "PayPal", "combosquat"),
+        ("gooogle.com", "Google", "typosquat"),
+        ("netflx.com", "Netflix", "typosquat"),
+        ("paypal.net", "PayPal", "tld_swap"),
+        ("paypal.com.account-check.example", "PayPal", "brand_in_subdomain"),
+        ("0ffice.com", "Microsoft", "homoglyph"),
+    ],
+)
+def test_check_lookalike_detects(candidate: str, brand: str, kind: str) -> None:
+    matches = domain.check_lookalike(candidate)
+    assert [(m.brand, m.kind) for m in matches][:1] == [(brand, kind)]
+    assert matches[0].legitimate_domain
+
+
+def test_idn_is_decoded() -> None:
+    [match] = domain.check_lookalike("xn--pple-43d.com")
+    assert match.decoded == "аpple.com"
+    assert match.legitimate_domain == "apple.com"
+    assert domain.check_lookalike("аpple.com")[0].domain == "xn--pple-43d.com"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "microsoft.com",
+        "login.microsoftonline.com",
+        "mail.paypal.com",
+        "apple.com",
+        "example.com",
+        "company.example",
+        "purchase.com",  # contains "chase"
+        "pineapple.com",  # contains "apple"
+        "home-office.co.uk",  # "office" is a generic label
+        "live-events.com",
+        "apply.com",  # one edit from "apple", but too short for typo matching
+        "groups.com",
+        "localhost",
+        "",
+    ],
+)
+def test_check_lookalike_ignores(candidate: str) -> None:
+    assert domain.check_lookalike(candidate) == []
+
+
+def test_one_match_per_brand_strongest_kind() -> None:
+    matches = domain.check_lookalike("paypa1-paypal.com")
+    assert [(m.brand, m.kind) for m in matches] == [("PayPal", "combosquat")]
+    assert all(m.brand != "PayPal" or m.kind == "combosquat" for m in matches)
+
+
+def test_skeleton_and_decode_idn() -> None:
+    assert domain.skeleton("PayPa1") == domain.skeleton("paypal")
+    assert domain.skeleton("rnicros0ft") == domain.skeleton("microsoft")
+    assert domain.decode_idn("xn--pple-43d.com") == "аpple.com"
+    assert domain.decode_idn("xn--invalid-.com") == "xn--invalid-.com"
+
+
+async def test_fixture_6_lookalike_finding() -> None:
+    result = await domain.analyze(parse_email((FIXTURES / "lookalike_domain.eml").read_bytes()))
+    finding = _ids(result)["lookalike_domain"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["domain"] == "micros0ft-support.example"
+    assert set(finding.evidence["roles"]) == {"from", "return_path"}
+    assert finding.evidence["matches"][0]["brand"] == "Microsoft"
+    assert "micros0ft-support.example" in result.raw["lookalikes"]
+
+
+async def test_punycode_domain_findings() -> None:
+    result = await _analyze("From: Apple <id@xn--pple-43d.com>\nReply-To: a@xn--mnchen-3ya.test")
+    punycode = [f for f in result.findings if f.id == "punycode_domain"]
+    severities = {f.evidence["domain"]: f.severity for f in punycode}
+    assert severities == {"xn--pple-43d.com": Severity.HIGH, "xn--mnchen-3ya.test": Severity.MEDIUM}
+    assert _ids(result)["lookalike_domain"].evidence["decoded"] == "аpple.com"
+
+
+async def test_no_lookalike_for_genuine_sender() -> None:
+    result = await _analyze("From: Microsoft <no-reply@accountprotection.microsoft.com>")
+    assert result.findings == []
+    assert result.raw["lookalikes"] == {}

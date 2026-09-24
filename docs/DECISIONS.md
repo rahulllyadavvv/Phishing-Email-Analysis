@@ -431,3 +431,35 @@
   `office 365`). The patterns are compiled once per loaded registry, so `data_loader.clear_cache()`
   also refreshes them. The `organization` section counts as one more brand when it has a name
   and domains.
+
+## P3.3: Lookalike domain detection
+
+- `check_lookalike(domain) -> list[LookalikeMatch]` lives in `phishlens/analyzers/domain.py`, as
+  the plan says. The URL analyzer will import it from there. It accepts ASCII, punycode or Unicode
+  input. It returns nothing for any (subdomain of a) brand's legitimate domain, and at most one
+  match per brand, the strongest by kind: homoglyph > typosquat > combosquat > tld_swap >
+  brand_in_subdomain.
+- Homoglyphs, digits and IDN: both sides are reduced to a "skeleton" (NFKC, lowercase, then the
+  single-character map, then multi-character sequences such as `rn`->`m`) from
+  `data/confusables.yaml`, a small hand-made subset of Unicode confusables for Latin, Cyrillic,
+  Greek and digits. `i`, `1`, `l` and `|` all map to `l`, since they look alike. Punycode labels
+  are decoded with Python's `idna` codec. A label that fails to decode is kept as it is.
+- The domain is split into subdomain, registered label and suffix with `parser.headers.org_domain`
+  (offline tldextract, with its last-two-labels fallback for `.example`/`.test`).
+- Typos: Damerau-Levenshtein (rapidfuzz) on skeletons, only for brand labels of at least 6
+  characters (distance 1; 2 from 9 characters on). Shorter labels (apple, adobe, ups) matched
+  ordinary words too often (`apply.com`), so they are caught only as homoglyphs or whole tokens.
+- Combosquatting: a hyphen or underscore token that equals, or is a homoglyph or typo of, the
+  brand label (`micros0ft-support`). Also the brand label appearing inside the label without a
+  separator, for labels of at least 6 characters (so `pineapple` is not Apple).
+- `brand_in_subdomain` (`paypal.com.account-check.example`) is an extra kind beyond the plan's
+  list, because it is a common phishing pattern. It is reported inside `lookalike_domain`.
+- `generic_labels` in `brand_registry.yaml` (office, live, outlook, chase, zoom, ...) are brand
+  labels that are everyday words. They match only as homoglyphs of the whole label (`0ffice.com`).
+  Accepted trade-off: `outlook-verify.com` is no longer flagged by the lookalike check. Brand
+  keywords in display names and bodies still catch most of these.
+- A known limit: TLD swaps flag country versions of global brands that the registry does not list
+  (for example `amazon.fr`). The fix is to add those domains to the registry.
+- Findings, per unique sender domain (From, Return-Path, Reply-To, Sender, with the roles
+  listed): `lookalike_domain` (high; all matches in evidence) and `punycode_domain` (medium, or
+  high when the domain is also a lookalike). `raw["lookalikes"]` maps each domain to its matches.

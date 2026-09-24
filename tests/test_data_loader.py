@@ -122,3 +122,15 @@ def test_invalid_brand_file_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Pa
 def test_every_data_file_has_an_extension_comment() -> None:
     for path in data_loader.DATA_DIR.glob("*.yaml"):
         assert path.read_text().startswith("#"), path.name
+
+
+def test_confusables_file_parses() -> None:
+    table = data_loader.confusables()
+    assert table.characters["0"] == "o"
+    assert table.characters["а"] == "a"  # Cyrillic a
+    assert table.sequences["rn"] == "m"
+    assert all(len(k) == 1 for k in table.characters)
+
+
+def test_generic_labels() -> None:
+    assert {"office", "live"} <= set(data_loader.brand_registry().generic_labels)
