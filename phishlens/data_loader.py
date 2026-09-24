@@ -27,6 +27,7 @@ __all__ = [
     "Esp",
     "ExecutableIndicators",
     "FileTypes",
+    "Lexicon",
     "PasswordHints",
     "Organization",
     "brand_for_domain",
@@ -44,6 +45,7 @@ __all__ = [
     "is_risky_tld",
     "is_shortener",
     "is_url_allowlisted",
+    "lexicons",
     "load_yaml",
     "normalize_domain",
     "password_hints",
@@ -254,6 +256,30 @@ class ExecutableIndicators(_Model):
     lnk_commands: Names
 
 
+class Lexicon(_Model):
+    """One tone category (``data/lexicons/<category>.yaml``)."""
+
+    finding_id: str
+    severity: str = "medium"
+    cap: int = 5
+    phrases: Names = ()
+    patterns: tuple[str, ...] = ()
+
+    @field_validator("severity")
+    @classmethod
+    def _known_severity(cls, value: str) -> str:
+        if value not in ("info", "low", "medium", "high", "critical"):
+            raise ValueError(f"unknown severity {value!r}")
+        return value
+
+    @field_validator("patterns")
+    @classmethod
+    def _valid_patterns(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        for pattern in value:
+            re.compile(pattern)
+        return value
+
+
 class Mailer(_Model):
     name: str
     pattern: str
@@ -289,6 +315,16 @@ def file_types() -> FileTypes:
 @cache
 def executable_indicators() -> ExecutableIndicators:
     return ExecutableIndicators.model_validate(load_yaml("executable_indicators.yaml"))
+
+
+@cache
+def lexicons() -> dict[str, Lexicon]:
+    """All tone lexicons, keyed by category (the file name without ``.yaml``)."""
+    folder = DATA_DIR / "lexicons"
+    return {
+        path.stem: Lexicon.model_validate(load_yaml(f"lexicons/{path.name}"))
+        for path in sorted(folder.glob("*.yaml"))
+    }
 
 
 @cache
@@ -352,5 +388,6 @@ def is_risky_tld(domain: str | None) -> bool:
 def clear_cache() -> None:
     for fn in (load_yaml, esps, brand_registry, free_webmail_domains, risky_tlds,
                shortener_domains, confusables, url_allowlist, url_credential_keywords,
-               file_types, password_hints, executable_indicators, suspicious_mailers):
+               file_types, password_hints, executable_indicators, suspicious_mailers,
+               lexicons):
         fn.cache_clear()

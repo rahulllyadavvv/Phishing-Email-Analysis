@@ -1,0 +1,21 @@
+# Generic greetings: mass phishing rarely knows the recipient's name.
+finding_id: generic_greeting
+severity: low
+cap: 1
+phrases:
+  - dear customer
+  - dear valued customer
+  - dear user
+  - dear account holder
+  - dear client
+  - dear member
+  - dear sir/madam
+  - dear sir or madam
+  - dear beneficiary
+  - hello user
+  - dear email user
+  - dear webmail user
+  - priya grahak
+  - प्रिय ग्राहक
+patterns:
+  - "^\\s*(dear|hello|hi)\\s+[\\w.+-]+@[\\w.-]+"

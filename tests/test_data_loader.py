@@ -143,3 +143,20 @@ def test_url_allowlist_and_keywords() -> None:
     keywords = data_loader.url_credential_keywords()
     assert {"login", "verify", "secure", "update", "account"} <= set(keywords)
     assert all(k == k.lower() for k in keywords)
+
+
+def test_lexicons_parse() -> None:
+    lexicons = data_loader.lexicons()
+    assert set(lexicons) == {
+        "urgency",
+        "fear",
+        "greed",
+        "authority",
+        "credential_request",
+        "payment_request",
+        "secrecy",
+        "generic_greeting",
+    }
+    for lexicon in lexicons.values():
+        assert lexicon.phrases or lexicon.patterns
+        assert lexicon.cap >= 1

@@ -987,3 +987,30 @@ Plan reviewed and approved before building.
   `raw["inline_qr"]`, with no finding. The attachment analyzer already raises `qr_code_url`
   for the same image (P6.5), so the scorer does not count it twice; the pipeline deduplicates
   URLs.
+
+## P8.1: Rule-based tone analysis
+
+- `phishlens/analyzers/tone.py` (module `tone`), with lexicons in `data/lexicons/*.yaml`, one per
+  category. Each file names its stable `finding_id` and its severity (`tone_urgency`,
+  `tone_fear` and `tone_greed` medium; `tone_authority` and `generic_greeting` low;
+  `credential_request` and `payment_request` high; `secrecy_request` medium), plus a `cap`,
+  `phrases` and regex `patterns`. The loader validates severities and compiles every pattern.
+  Each lexicon has a few Hindi (Devanagari) and Hinglish phrases.
+- Text = subject + body (text part, or the HTML's visible text when there is no text part),
+  normalized: zero-width characters removed, lowercased, runs of spaces collapsed, line breaks
+  kept (so `^` patterns work per line, e.g. `Dear <email address>`).
+- Phrases match as whole words with flexible whitespace. The word boundary includes the
+  Devanagari block, because Python's `\w` does not cover Devanagari vowel signs. Within one
+  category overlapping matches are resolved longest first, so "account will be suspended" beats
+  "suspended". Categories may overlap each other (the same words can be urgent and fearful).
+- One finding per category: `evidence.matches` (distinct phrases with a 40-character context
+  snippet, defanged), `count`, `cap` and `counted = min(count, cap)`. `counted` is the per-category
+  cap the scorer uses, so a very long message cannot pile up points in one category.
+- `raw["normalized_text"]` (first 20,000 characters) and `raw["highlights"]`
+  (`[category, phrase, start, end]` offsets into it) are for UI highlighting.
+- Brands in the body: `domain.find_brand_mentions` on the body, then `domain.bind_identity`,
+  using the header context for authentication and the domain context for lookalike/new domains.
+  To avoid a second `brand_impersonation` for the same brand, brands the domain analyzer
+  already claimed (`raw["identity"]["claimed_brands"]`) are skipped. Without a domain result,
+  subject brands are checked here too. Findings from `bind_identity` are re-labelled with module
+  `tone`. Body-only claims are weak (medium) unless the sender domain is a lookalike or new.

@@ -1,0 +1,35 @@
+# Urgency: pressure to act right now so the victim does not stop to think.
+# phrases: plain lowercase text, matched as whole words (spaces match any whitespace).
+# patterns: case-insensitive regular expressions for variable wording.
+# cap: at most this many distinct matches count toward the finding strength.
+finding_id: tone_urgency
+severity: medium
+cap: 5
+phrases:
+  - urgent
+  - immediately
+  - immediate action
+  - action required
+  - act now
+  - right away
+  - as soon as possible
+  - asap
+  - final notice
+  - last warning
+  - last chance
+  - within 24 hours
+  - within 48 hours
+  - expires today
+  - respond today
+  - time sensitive
+  - don't delay
+  - deadline
+  - turant
+  - jaldi karein
+  - abhi karein
+  - तुरंत
+  - अभी
+patterns:
+  - "(expire[sd]?|expiring|suspended|closed|deactivated)\\s+(in|within)\\s+\\d+\\s*(minutes?|hours?|hrs?|days?)"
+  - "\\b\\d+\\s*(hours?|hrs?)\\s+(left|remaining)"
+  - "before\\s+it'?s\\s+too\\s+late"

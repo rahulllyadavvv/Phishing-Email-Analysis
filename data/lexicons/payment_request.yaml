@@ -1,0 +1,30 @@
+# Payment requests: invoices, transfers, gift cards and changed bank details.
+finding_id: payment_request
+severity: high
+cap: 5
+phrases:
+  - wire transfer
+  - bank transfer
+  - make a payment
+  - payment is overdue
+  - outstanding invoice
+  - overdue invoice
+  - pay now
+  - pay immediately
+  - updated bank details
+  - new bank account
+  - change of bank details
+  - gift card
+  - gift cards
+  - itunes card
+  - google play card
+  - bitcoin wallet
+  - processing fee
+  - customs fee
+  - paisa bhejein
+  - bhugtan karein
+  - भुगतान
+patterns:
+  - "(send|transfer|wire|pay)\\s+(the\\s+)?(amount|money|funds|payment|\\$|rs\\.?|inr|₹)"
+  - "(upi|paytm|phonepe|gpay)\\s+(id|number|par|to)"
+  - "(buy|purchase|get)\\s+(\\d+\\s+)?(gift\\s*cards?|vouchers?)"
