@@ -1387,3 +1387,24 @@ Plan reviewed and approved before building.
 - On the dev machine Pango is missing, so the PDF test is skipped; the "unavailable" path and the
   no-fetch URL fetcher are tested with fakes. `test_html_has_no_live_links_except_allowed` checks
   that the report has no http(s) link or URL other than attack.mitre.org / urlscan.io.
+
+## P12.1: Database models
+
+- `api/db.py` (SQLModel): one table, `Case`. The ID is a short readable string
+  `PL-YYYYMMDD-XXXXX` (5 random characters from an alphabet without 0/O/1/I/L), safe in URLs
+  and file names, and also used as the pipeline `case_id`, so reports, quarantine folder and row
+  share it. Other fields: created/updated timestamps, case type, original file name, input
+  SHA-256 (indexed, for deduplication), subject, sender, verdict, score, confidence, status
+  (queued/running/done/error, validated), error message, report JSON path, and `report_files`
+  (format -> path, a JSON column). The full report stays in its JSON file; the row holds only
+  what listing, searching and statistics need.
+- Engine per database URL (cached). SQLite gets `check_same_thread=False` (the worker and the
+  API use threads), and in-memory SQLite a `StaticPool`, so tests share one database. Postgres
+  works through `DATABASE_URL` with `pool_pre_ping`. `init_db` creates tables (called on API
+  startup). `session_scope` commits on success and rolls back on errors.
+- Helpers: `create_case`, `get_case`, `update_case` (rejects unknown fields and invalid
+  statuses, bumps `updated_at`), `delete_case` (returns the row so the caller can remove its
+  files), `find_completed_by_sha256` (newest finished case, for P12.4), and `list_cases`
+  (filters verdict / case_type / date range / q, which searches subject, sender and file name
+  case-insensitively; newest first; offset/limit capped at 500; returns items and total).
+- SQLite stores datetimes without a timezone; they are written in UTC.
