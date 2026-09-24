@@ -949,3 +949,41 @@ Plan reviewed and approved before building.
 - `analyze_files(files, case_id, passwords=None, reputation=True, sandbox=True)` runs the same
   stages without an email, for standalone file cases (P10). `analyze` and `analyze_files`
   share `_run`. `sandbox=False` together with `reputation=False` keeps everything on this host.
+
+## P7.1: Hidden artifacts analyzer
+
+- `phishlens/analyzers/artifacts.py` (module `artifacts`). The HTML body is parsed with
+  BeautifulSoup and never rendered, so no remote images or pixels are loaded. Each check is its
+  own step with its own error entry. Every URL in evidence is defanged, and text snippets are
+  cut to 200 characters and defanged.
+- Tracking pixels (`tracking_pixel`, low): only remote (http/https) images count, and only when
+  1x1 or smaller (width and height attributes, `px` allowed) or hidden (their own style or an
+  invisible ancestor). A long unique ID parameter (16+ characters) is recorded as an extra
+  reason, but does not make an image a tracker on its own: CDN cache-busting parameters look
+  the same. `cid:` inline images are ignored. Tracking hosts (defanged) go to
+  `raw["tracking_domains"]`.
+- Hidden text (`hidden_text`, medium): elements with display:none, visibility:hidden,
+  font-size:0, opacity:0, (max-)height:0, the `hidden` attribute, or a text colour equal to the
+  background colour (white text with no background counts as white-on-white). Only blocks of 10+
+  characters count, and a hidden block inside another hidden block is counted once.
+  `hidden_filler_text` (medium) when the hidden text totals 500+ characters.
+  `zero_width_characters` (medium) for 3+ of U+200B/C/D, U+2060, U+FEFF, soft hyphen, U+180E.
+- `text_html_mismatch` (low): both parts have at least 5 words and their word-set Jaccard overlap
+  is under 0.2. The HTML side uses all of its text, hidden included (fixture 11 gives 0.23).
+- Obfuscation: `encoded_link` (medium) for HTML entities inside an `href` (checked on the raw
+  HTML, since the parser decodes them) or a query parameter that base64-decodes to an http(s) URL.
+  The decoded URL goes to `extracted_urls` (source `artifact`). `script_in_body` (high) for any
+  `<script>` in the body. `meta_refresh` (medium) for refresh targets, which go to
+  `extracted_urls` (source `meta_refresh`).
+- Headers: `missing_message_id` and `missing_date` (low). `date_in_future` (medium, more than 1
+  day after delivery) and `date_too_old` (low, more than 30 days before delivery) are only
+  checked when a Received timestamp exists; delivery is the newest one, so Date is never
+  compared with itself. `message_id_domain_mismatch` (low) when the Message-ID's organizational
+  domain differs from From's and is not a known ESP. The synthetic fixtures all use
+  `@phishlens.test` Message-IDs, so it fires on them. `suspicious_mailer` (medium) when
+  X-Mailer, User-Agent or X-MimeOLE matches a pattern in `data/suspicious_mailers.yaml`
+  (validated regexes).
+- Inline QR codes: decoded URLs go to `extracted_urls` (source `qr_code`) and
+  `raw["inline_qr"]`, with no finding. The attachment analyzer already raises `qr_code_url`
+  for the same image (P6.5), so the scorer does not count it twice; the pipeline deduplicates
+  URLs.

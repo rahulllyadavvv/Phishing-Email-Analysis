@@ -10,6 +10,7 @@ listed domain itself and any subdomain of it, case-insensitively and ignoring a 
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
@@ -46,6 +47,7 @@ __all__ = [
     "load_yaml",
     "normalize_domain",
     "password_hints",
+    "suspicious_mailers",
     "risky_tlds",
     "shortener_domains",
     "url_allowlist",
@@ -252,6 +254,21 @@ class ExecutableIndicators(_Model):
     lnk_commands: Names
 
 
+class Mailer(_Model):
+    name: str
+    pattern: str
+
+    @field_validator("pattern")
+    @classmethod
+    def _valid_regex(cls, value: str) -> str:
+        re.compile(value)
+        return value
+
+
+class _MailerFile(_Model):
+    mailers: tuple[Mailer, ...]
+
+
 class PasswordHints(_Model):
     """Words introducing a password in an email body (``data/password_hints.yaml``)."""
 
@@ -272,6 +289,11 @@ def file_types() -> FileTypes:
 @cache
 def executable_indicators() -> ExecutableIndicators:
     return ExecutableIndicators.model_validate(load_yaml("executable_indicators.yaml"))
+
+
+@cache
+def suspicious_mailers() -> tuple[Mailer, ...]:
+    return _MailerFile.model_validate(load_yaml("suspicious_mailers.yaml")).mailers
 
 
 @cache
@@ -330,5 +352,5 @@ def is_risky_tld(domain: str | None) -> bool:
 def clear_cache() -> None:
     for fn in (load_yaml, esps, brand_registry, free_webmail_domains, risky_tlds,
                shortener_domains, confusables, url_allowlist, url_credential_keywords,
-               file_types, password_hints, executable_indicators):
+               file_types, password_hints, executable_indicators, suspicious_mailers):
         fn.cache_clear()
