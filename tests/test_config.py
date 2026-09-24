@@ -53,6 +53,8 @@ def test_defaults_without_env_file() -> None:
     assert settings.dkim_max_age_days == 7.0
     assert settings.enrichment_timeout_seconds == 15.0
     assert settings.vt_malicious_threshold == 3
+    assert settings.llm_tone_enabled is False and settings.llm_model == "claude-opus-5"
+    assert settings.tone_model_path is None and settings.ml_phishing_threshold == 0.8
     assert (settings.archive_max_depth, settings.archive_max_files) == (3, 100)
     assert settings.archive_max_total_mb == 200.0
     assert {"exe", "lnk", "iso", "one", "docm"} <= set(settings.high_risk_extensions)

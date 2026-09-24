@@ -10,6 +10,12 @@ scorer uses so a long rant cannot outweigh everything else.
 ``raw["highlights"]`` lists ``(category, phrase, start, end)`` offsets into
 ``raw["normalized_text"]`` for UI highlighting.
 
+Optional ML layer (``tone_ml``): a local fine-tuned model gives a phishing probability
+(``ml_phishing_probability_high`` from ``ML_PHISHING_THRESHOLD``), and the opt-in LLM classifier
+scores urgency/greed/fear and names the impersonated brand (``llm_impersonation`` when that
+brand is not the sender). Both are skipped when not configured. When the LLM runs,
+``raw["llm_warning"]`` records that the email text was sent to a third party.
+
 Brands named in the body are checked with ``domain.bind_identity``: claiming to be a brand the
 sender did not authenticate as is ``brand_impersonation``. Brands already claimed in the display
 name, a lookalike domain or the subject are handled by the domain analyzer and skipped here.
@@ -31,7 +37,10 @@ from phishlens.analyzers.domain import (
     find_brand_mentions,
     sender_identity,
 )
-from phishlens.data_loader import Lexicon, lexicons
+from phishlens.analyzers.tone_ml import configured_classifiers
+from phishlens.config import get_settings
+from phishlens.data_loader import Lexicon, domain_matches, is_free_webmail, lexicons
+from phishlens.enrichment.llm import LLM_SERVICE_NAME, LlmNotConfigured
 from phishlens.models import AnalyzerResult, Finding, ParsedEmail, Severity
 
 MODULE = "tone"
@@ -74,6 +83,16 @@ TEXTS: dict[str, tuple[str, str]] = {
         "Asks for secrecy",
         "The message asks the reader to keep the request private or away from normal "
         "channels, typical of CEO fraud.",
+    ),
+    "ml_phishing_probability_high": (
+        "Machine-learning model rates the text as phishing",
+        "A text classifier trained on phishing and legitimate mail gives this message a high "
+        "phishing probability.",
+    ),
+    "llm_impersonation": (
+        "Language model: message impersonates a brand",
+        "The language model reads the message as speaking for a brand or organisation that "
+        "the sender does not belong to.",
     ),
     "generic_greeting": (
         "Generic greeting",
@@ -211,6 +230,91 @@ def _brand_claims(
     result.findings.extend(f.model_copy(update={"module": MODULE}) for f in findings)
 
 
+def _finding(finding_id: str, severity: Severity, evidence: dict[str, Any]) -> Finding:
+    title, description = TEXTS[finding_id]
+    return Finding(
+        id=finding_id,
+        module=MODULE,
+        title=title,
+        description=description,
+        severity=severity,
+        evidence=evidence,
+    )
+
+
+def _sender_is_brand(
+    brand_name: str, email: ParsedEmail, context: dict[str, AnalyzerResult] | None
+) -> bool:
+    """True when the sender authenticated as (or at least uses) a domain of the named brand."""
+    identity = sender_identity(email, context)
+    if identity is None or is_free_webmail(identity.domain) or identity.authenticated is False:
+        return False
+    return any(
+        domain_matches(identity.domain, m.brand.legitimate_domains)
+        for m in find_brand_mentions(brand_name)
+    )
+
+
+async def _ml_layer(
+    email: ParsedEmail,
+    body: str,
+    context: dict[str, AnalyzerResult] | None,
+    result: AnalyzerResult,
+) -> None:
+    classifiers = configured_classifiers()
+    if not classifiers:
+        result.raw["ml"] = {"status": "not_configured"}
+        return
+    settings = get_settings()
+    text = f"Subject: {email.subject}\n\n{body}"
+    layer: dict[str, Any] = {}
+    for classifier in classifiers:
+        try:
+            score = await classifier.classify(text)
+        except LlmNotConfigured as exc:
+            layer[classifier.name] = {"status": "not_configured", "reason": str(exc)}
+            continue
+        except Exception as exc:
+            result.errors.append(f"ml: {classifier.name}: {type(exc).__name__}: {exc}")
+            continue
+        entry = {
+            "probability": round(score.probability, 4),
+            "rationale": defang_text(score.rationale) if score.rationale else None,
+            "details": score.details,
+        }
+        layer[classifier.name] = entry
+        if classifier.name == "llm":
+            result.raw["llm_warning"] = (
+                f"The email text was sent to {LLM_SERVICE_NAME} for tone assessment."
+            )
+            brand = score.details.get("impersonated_brand")
+            if brand and not _sender_is_brand(brand, email, context):
+                result.findings.append(
+                    _finding(
+                        "llm_impersonation",
+                        Severity.MEDIUM,
+                        {
+                            "brand": brand,
+                            "requested_action": score.details.get("requested_action"),
+                            "rationale": entry["rationale"],
+                        },
+                    )
+                )
+        elif score.probability >= settings.ml_phishing_threshold:
+            result.findings.append(
+                _finding(
+                    "ml_phishing_probability_high",
+                    Severity.HIGH if score.probability >= 0.95 else Severity.MEDIUM,
+                    {
+                        "classifier": classifier.name,
+                        "probability": entry["probability"],
+                        "threshold": settings.ml_phishing_threshold,
+                    },
+                )
+            )
+    result.raw["ml"] = layer
+
+
 async def analyze(
     email: ParsedEmail, context: dict[str, AnalyzerResult] | None = None
 ) -> AnalyzerResult:
@@ -229,5 +333,9 @@ async def analyze(
         _brand_claims(email, body, context, result)
     except Exception as exc:
         result.errors.append(f"brands: {type(exc).__name__}: {exc}")
+    try:
+        await _ml_layer(email, body, context, result)
+    except Exception as exc:
+        result.errors.append(f"ml: {type(exc).__name__}: {exc}")
     result.duration_ms = int((time.perf_counter() - start) * 1000)
     return result

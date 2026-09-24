@@ -1014,3 +1014,42 @@ Plan reviewed and approved before building.
   already claimed (`raw["identity"]["claimed_brands"]`) are skipped. Without a domain result,
   subject brands are checked here too. Findings from `bind_identity` are re-labelled with module
   `tone`. Body-only claims are weak (medium) unless the sender domain is a lookalike or new.
+
+## P8.2: ML and LLM classifiers
+
+- `phishlens/analyzers/tone_ml.py`: `ToneClassifier` protocol (`name`, `async classify(text)
+  -> ToneScore(probability, rationale, details)`), `LocalTransformerClassifier` and
+  `LLMClassifier`. `configured_classifiers()` returns only those that can run, so with nothing
+  configured the tone analyzer records `raw["ml"] = {"status": "not_configured"}` and moves on.
+  Both classifiers see `Subject: ...` plus the body in its original form (not the normalized
+  rule text).
+- Local model: enabled when `TONE_MODEL_PATH` is an existing folder and the optional `ml` extra
+  (transformers, torch) is installed. It uses a cached `pipeline("text-classification",
+  top_k=None, truncation=True)` in a worker thread. The phishing probability comes from a known
+  phishing label (`LABEL_1`, `phishing`, `spam`, ...), else 1 - a known legitimate label's
+  score (`LABEL_0`, `legitimate`, `ham`, ...). Unknown label names are an error rather than a
+  guess. `ml_phishing_probability_high` when the probability is at least
+  `ML_PHISHING_THRESHOLD` (0.8): high from 0.95, otherwise medium. The probability is in the
+  evidence so the scorer (P10) can scale the weight by it.
+- LLM: `phishlens/enrichment/llm.py` (external calls live in `enrichment/`), off unless
+  `LLM_TONE_ENABLED=true` **and** `LLM_API_KEY` are set, because the email text leaves this host.
+  It uses the official `anthropic` SDK (optional `llm` extra, imported only when used), in line
+  with the SDK guidance, rather than the `BaseClient` httpx wrapper. The SDK does its own
+  retries for 429/5xx and connection errors.
+  - Model `LLM_MODEL`, default `claude-opus-5`. Request: `client.beta.messages.parse` with
+    `output_format=LlmToneAssessment` (structured outputs, so the reply is schema-valid JSON,
+    validated again by pydantic: urgency/greed/fear 0-10, impersonated_brand, requested_action,
+    rationale). Server-side refusal fallbacks are on (`fallbacks="default"`, beta
+    `server-side-fallback-2026-07-01`): phishing text may trip a safety classifier, and the API
+    then reruns on a suitable model. A final `stop_reason == "refusal"` becomes an error with the
+    category.
+  - Prompt injection: the email goes inside `<email>` tags as untrusted data, and the system
+    prompt says never to follow instructions in it.
+  - An invalid answer is retried once (2 attempts). SDK errors are scrubbed of secrets. The text is
+    cut to 50,000 characters, and that is recorded (`truncated`, `chars_sent`), never silent.
+  - `LLMClassifier.probability` = the strongest of urgency/greed/fear / 10 (recorded, no
+    threshold finding). `llm_impersonation` (medium) when the model names a brand and the sender
+    is not that brand: a registry brand's legitimate domain, not free webmail, and not known to
+    be unauthenticated. `raw["llm_warning"]` states that the text was sent to Anthropic.
+- A failing classifier becomes an entry in `errors`; the rule layer's findings are unaffected.
+  Tests use only fake classifiers, a fake pipeline and a fake Anthropic client.

@@ -113,6 +113,15 @@ class Settings(BaseSettings):
         "jar", "com", "pif", "cpl", "dll",
     ]
 
+    # Tone ML layer: a local Hugging Face model folder (optional "ml" dependencies) and the
+    # probability from which it raises a finding.
+    tone_model_path: str | None = None
+    ml_phishing_threshold: float = Field(default=0.8, ge=0, le=1)
+    # LLM tone classifier: OFF unless enabled here AND LLM_API_KEY is set, because it sends the
+    # email text to a third party (Anthropic). Needs the optional "llm" dependencies.
+    llm_tone_enabled: bool = False
+    llm_model: str = "claude-opus-5"
+
     # Sandbox: how long to wait for a report and how often to poll.
     sandbox_max_wait_seconds: float = Field(default=300.0, gt=0)
     sandbox_poll_seconds: float = Field(default=15.0, gt=0)

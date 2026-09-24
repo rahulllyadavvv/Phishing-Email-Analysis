@@ -44,3 +44,14 @@ New Python dependencies: `py7zr` (7z), `pycdlib` (ISO images), `pyzipper` (AES-e
 `phishlens/analyzers/qr.py` decodes QR codes with pyzbar, which needs the zbar system library
 (`brew install zbar` / `apt install libzbar0`). Without it, QR decoding is skipped and recorded
 (`qr_decoding: unavailable` in the report), and `test_pdf_qr_code_in_image` is skipped.
+
+## P8.2: optional ML and LLM tone classifiers
+
+Both are off unless configured, and the tests never need them:
+
+- Local model: `pip install -e ".[ml]"` (transformers + torch), then set `TONE_MODEL_PATH` to a
+  fine-tuned text-classification model folder (see P8.3 `scripts/train_tone_model.py`).
+- LLM (Claude): `pip install -e ".[llm]"` (the `anthropic` SDK), set `LLM_API_KEY` and
+  `LLM_TONE_ENABLED=true`. This sends the email subject and body (up to 50,000 characters) to
+  Anthropic; each report records that in `raw["llm_warning"]`. `LLM_MODEL` defaults to
+  `claude-opus-5`.

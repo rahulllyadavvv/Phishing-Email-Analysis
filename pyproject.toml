@@ -51,6 +51,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ml = [
+    "transformers",
+    "torch",
+]
+llm = [
+    "anthropic",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
