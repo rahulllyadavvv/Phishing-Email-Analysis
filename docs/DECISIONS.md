@@ -666,3 +666,39 @@ Plan reviewed and approved before building.
   service. Every result is returned in order, including `not_configured` ones, so reports show
   what was checked. Because the blocklists never answer `clean` (P4.3), VirusTotal is only
   reached when the earlier services had nothing.
+
+## P5.1: Static URL checks
+
+- `phishlens/analyzers/urls.py` (module `urls`):
+  `analyze(email, context=None, extra_urls=None)`. `extra_urls` carries URLs found by other
+  analyzers (attachments, QR codes), and the pipeline passes them in. URLs are deduplicated on
+  the stripped string. Each row in `raw["urls"]` lists all its sources and visible texts.
+- Findings are grouped per ID (one finding per ID, `evidence.urls` lists each URL with its
+  details, plus `count`). This matches the DKIM and header findings: the scorer counts a kind of
+  problem once per email, and the weights in P10 can use `count` if needed. Severities:
+  - high: `link_text_mismatch`, `at_sign_in_url`, `brand_in_unrelated_domain`,
+    `data_or_javascript_uri`;
+  - medium: `ip_address_url`, `punycode_url` (high when the domain is also a lookalike);
+  - low: `url_shortener`, `excessive_subdomains` (more than 3 labels before the registered
+    domain), `risky_tld`, `credential_keywords`.
+- `link_text_mismatch`: the first domain-looking token in the visible text is compared with the
+  link's registered domain (organizational domain, so `www.shop.test` and `mail.shop.test`
+  match `shop.test`). Visible text without a domain ("Click here") is not a mismatch.
+- `ip_address_url` also catches decimal, hex and octal IP forms (`http://3405803785/`,
+  `0xcb.0x0.0x71.0x9`).
+- `at_sign_in_url` looks only at the authority (userinfo), not at an `@` in the path or query.
+- `credential_keywords` checks the path and query only (the host is covered by the lookalike and
+  brand checks). Keywords live in `data/url_keywords.yaml` (CLAUDE.md: no hard-coded tables) and
+  match as whole words, so `accountants` does not match `account`.
+- `brand_in_unrelated_domain` uses `check_lookalike` from P3.3 on the link host.
+- `data/url_allowlist.yaml` (short list of big platforms) sets `allowlisted` on a row. P5.2 will
+  skip reputation lookups for those URLs, but static checks still run on them.
+- Defanging: `phishlens/ioc/defang.py` is created now (P9.1 reuses it). `hxxp`/`hxxps`/`fxp`
+  schemes, `[.]` in hosts, `[@]` in the authority and in emails, and `[:]` after `javascript:`,
+  `vbscript:` and `data:`. It is idempotent. Everything this analyzer puts in findings is
+  defanged (URLs, visible texts, domains in the lookalike matches). `raw["urls"]` keeps the
+  original `url` (needed for reputation lookups and IOC extraction) next to `defanged`.
+- Open point for P11/P12: the header and domain analyzers (P2/P3) put raw domains and addresses
+  in finding descriptions and evidence. Rather than changing each analyzer, the output layer
+  (report, API, UI) should defang those fields when rendering. This is noted here so it is not
+  forgotten.

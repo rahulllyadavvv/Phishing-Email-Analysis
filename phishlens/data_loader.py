@@ -37,10 +37,13 @@ __all__ = [
     "is_free_webmail",
     "is_risky_tld",
     "is_shortener",
+    "is_url_allowlisted",
     "load_yaml",
     "normalize_domain",
     "risky_tlds",
     "shortener_domains",
+    "url_allowlist",
+    "url_credential_keywords",
 ]
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -190,6 +193,20 @@ def shortener_domains() -> frozenset[str]:
     return frozenset(_DomainList.model_validate(load_yaml("shorteners.yaml")).domains)
 
 
+class _UrlKeywords(_Model):
+    credential_keywords: Names
+
+
+@cache
+def url_allowlist() -> frozenset[str]:
+    return frozenset(_DomainList.model_validate(load_yaml("url_allowlist.yaml")).domains)
+
+
+@cache
+def url_credential_keywords() -> tuple[str, ...]:
+    return _UrlKeywords.model_validate(load_yaml("url_keywords.yaml")).credential_keywords
+
+
 @cache
 def confusables() -> Confusables:
     return Confusables.model_validate(load_yaml("confusables.yaml"))
@@ -219,6 +236,10 @@ def is_shortener(domain: str | None) -> bool:
     return domain_matches(domain, shortener_domains()) is not None
 
 
+def is_url_allowlisted(domain: str | None) -> bool:
+    return domain_matches(domain, url_allowlist()) is not None
+
+
 def is_risky_tld(domain: str | None) -> bool:
     domain = normalize_domain(domain)
     return bool(domain) and domain.rsplit(".", 1)[-1] in risky_tlds()
@@ -226,5 +247,5 @@ def is_risky_tld(domain: str | None) -> bool:
 
 def clear_cache() -> None:
     for fn in (load_yaml, esps, brand_registry, free_webmail_domains, risky_tlds,
-               shortener_domains, confusables):
+               shortener_domains, confusables, url_allowlist, url_credential_keywords):
         fn.cache_clear()

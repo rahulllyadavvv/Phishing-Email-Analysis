@@ -134,3 +134,12 @@ def test_confusables_file_parses() -> None:
 
 def test_generic_labels() -> None:
     assert {"office", "live"} <= set(data_loader.brand_registry().generic_labels)
+
+
+def test_url_allowlist_and_keywords() -> None:
+    assert data_loader.is_url_allowlisted("accounts.google.com")
+    assert data_loader.is_url_allowlisted("W3.org.")
+    assert not data_loader.is_url_allowlisted("google.com.evil.test")
+    keywords = data_loader.url_credential_keywords()
+    assert {"login", "verify", "secure", "update", "account"} <= set(keywords)
+    assert all(k == k.lower() for k in keywords)
