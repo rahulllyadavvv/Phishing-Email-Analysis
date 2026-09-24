@@ -68,6 +68,17 @@ class VerdictLabel(StrEnum):
     MALICIOUS = "malicious"
 
 
+class EnrichmentStatus(StrEnum):
+    """Normalized verdict of one threat-intel lookup."""
+
+    MALICIOUS = "malicious"
+    SUSPICIOUS = "suspicious"
+    CLEAN = "clean"
+    UNKNOWN = "unknown"
+    ERROR = "error"
+    NOT_CONFIGURED = "not_configured"
+
+
 class _Model(BaseModel):
     """Base class for all PhishLens models."""
 
@@ -199,6 +210,26 @@ class AnalyzerResult(_Model):
     errors: list[str] = Field(default_factory=list)
     skipped: bool = False
     duration_ms: int = 0
+
+
+class EnrichmentResult(_Model):
+    """Normalized result of one external lookup (VirusTotal, URLhaus, RDAP, ...).
+
+    ``query`` is the normalized value that was looked up. ``detections`` / ``total_engines``
+    are engine counts where the service has them (0 otherwise). ``details`` holds
+    service-specific data, ``link`` a human-readable report URL, and ``error`` a message
+    (with API keys removed) when ``status`` is ``error``.
+    """
+
+    service: str
+    query: str
+    status: EnrichmentStatus
+    detections: int = 0
+    total_engines: int = 0
+    details: dict[str, Any] = Field(default_factory=dict)
+    cached: bool = False
+    link: str | None = None
+    error: str | None = None
 
 
 class IOC(_Model):

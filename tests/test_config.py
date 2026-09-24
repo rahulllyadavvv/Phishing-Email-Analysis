@@ -51,8 +51,12 @@ def test_defaults_without_env_file() -> None:
     assert settings.dns_sqlite_cache is True
     assert settings.dns_cache_path == "phishlens_dns_cache.sqlite"
     assert settings.dkim_max_age_days == 7.0
-    assert settings.rdap_timeout_seconds == 10.0
-    assert settings.rdap_cache_ttl_seconds == 86400
+    assert settings.enrichment_timeout_seconds == 15.0
+    assert settings.enrichment_max_retries == 3
+    assert settings.enrichment_cache is True
+    assert settings.cache_ttl("virustotal") == 86400
+    assert settings.rate_limit("virustotal") == (4, 60.0)
+    assert settings.rate_limit("unknown-service") == (1, 1.0)
     assert not any(settings.configured_services().values())
 
 
@@ -123,3 +127,37 @@ def test_unknown_service_raises() -> None:
 def test_service_fields_exist() -> None:
     for field in SERVICE_FIELDS.values():
         assert field in Settings.model_fields
+
+
+def test_enrichment_service_maps(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_CACHE_TTL", "VirusTotal=3600, rdap=0")
+    monkeypatch.setenv("ENRICHMENT_RATE_LIMITS", "virustotal=500/60,urlscan=2/1.5")
+    settings = Settings()
+    assert settings.cache_ttl("virustotal") == 3600
+    assert settings.cache_ttl("rdap") == 0
+    assert settings.cache_ttl("urlscan") == 86400
+    assert settings.rate_limit("virustotal") == (500, 60.0)
+    assert settings.rate_limit("urlscan") == (2, 1.5)
+    assert settings.rate_limit("abuseipdb") == (1000, 86400.0)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("ENRICHMENT_CACHE_TTL", "virustotal=soon"),
+        ("ENRICHMENT_CACHE_TTL", "virustotal"),
+        ("ENRICHMENT_RATE_LIMITS", "virustotal=4"),
+        ("ENRICHMENT_RATE_LIMITS", "virustotal=0/60"),
+        ("ENRICHMENT_RATE_LIMITS", "virustotal=x/y"),
+    ],
+)
+def test_invalid_service_maps(monkeypatch: pytest.MonkeyPatch, name: str, value: str) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError):
+        Settings()
+
+
+def test_secret_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "vt-secret")
+    monkeypatch.setenv("ABUSEIPDB_API_KEY", "   ")
+    assert Settings().secret_values() == ["vt-secret"]

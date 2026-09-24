@@ -14,6 +14,25 @@ from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 CommaList = Annotated[list[str], NoDecode]
+# "service=value,service=value" in the environment; parsed by validators below.
+ServiceMap = Annotated[dict[str, str], NoDecode]
+
+# Cache lifetime for enrichment results when ENRICHMENT_CACHE_TTL has no entry for a service.
+DEFAULT_CACHE_TTL_SECONDS = 86400
+
+# Conservative default rate limits: service -> (requests, per seconds). Override with
+# ENRICHMENT_RATE_LIMITS to match your API tier.
+DEFAULT_RATE_LIMITS: dict[str, tuple[int, float]] = {
+    "virustotal": (4, 60.0),
+    "abuseipdb": (1000, 86400.0),
+    "hybrid_analysis": (5, 60.0),
+    "urlscan": (60, 60.0),
+    "rdap": (1, 1.0),
+    "abusech": (10, 1.0),
+    "google_safebrowsing": (10, 1.0),
+    "cape": (10, 1.0),
+}
+FALLBACK_RATE_LIMIT: tuple[int, float] = (1, 1.0)
 
 # Service name -> settings field that must be set for the service to be enabled.
 SERVICE_FIELDS: dict[str, str] = {
@@ -68,9 +87,15 @@ class Settings(BaseSettings):
     dns_sqlite_cache: bool = True
     dns_cache_path: str = "phishlens_dns_cache.sqlite"
 
-    # RDAP (domain registration dates): request timeout and in-memory cache lifetime.
-    rdap_timeout_seconds: float = Field(default=10.0, gt=0)
-    rdap_cache_ttl_seconds: int = Field(default=86400, ge=0)
+    # Enrichment HTTP clients (phishlens/enrichment/base.py).
+    enrichment_timeout_seconds: float = Field(default=15.0, gt=0)
+    enrichment_max_retries: int = Field(default=3, ge=0)
+    enrichment_cache: bool = True
+    enrichment_cache_path: str = "phishlens_enrichment_cache.sqlite"
+    # Per-service overrides: "virustotal=3600,rdap=604800" (seconds; 0 disables caching).
+    enrichment_cache_ttl: ServiceMap = {}
+    # Per-service overrides: "virustotal=500/60" (requests per seconds).
+    enrichment_rate_limits: ServiceMap = {}
 
     # DKIM: a valid signature older than this (at delivery time) may be a replayed message.
     dkim_max_age_days: float = Field(default=7.0, gt=0)
@@ -88,6 +113,56 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip().lower() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("enrichment_cache_ttl", "enrichment_rate_limits", mode="before")
+    @classmethod
+    def _split_service_map(cls, value: object) -> object:
+        if isinstance(value, str):
+            pairs = {}
+            for item in value.split(","):
+                if not item.strip():
+                    continue
+                name, sep, setting = item.partition("=")
+                if not sep or not name.strip() or not setting.strip():
+                    raise ValueError(f"expected service=value, got {item.strip()!r}")
+                pairs[name.strip().lower()] = setting.strip()
+            return pairs
+        return value
+
+    @field_validator("enrichment_cache_ttl")
+    @classmethod
+    def _check_ttls(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, ttl in value.items():
+            if not ttl.isdigit():
+                raise ValueError(f"cache TTL for {name} must be whole seconds, got {ttl!r}")
+        return value
+
+    @field_validator("enrichment_rate_limits")
+    @classmethod
+    def _check_rates(cls, value: dict[str, str]) -> dict[str, str]:
+        for name, rate in value.items():
+            _parse_rate(name, rate)
+        return value
+
+    def cache_ttl(self, service: str) -> int:
+        """Enrichment cache lifetime for ``service`` in seconds (0 = do not cache)."""
+        ttl = self.enrichment_cache_ttl.get(service)
+        return int(ttl) if ttl is not None else DEFAULT_CACHE_TTL_SECONDS
+
+    def rate_limit(self, service: str) -> tuple[int, float]:
+        """``(requests, per_seconds)`` allowed for ``service``."""
+        if service in self.enrichment_rate_limits:
+            return _parse_rate(service, self.enrichment_rate_limits[service])
+        return DEFAULT_RATE_LIMITS.get(service, FALLBACK_RATE_LIMIT)
+
+    def secret_values(self) -> list[str]:
+        """Every configured secret, for scrubbing error messages. Never log the result."""
+        values = []
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            if isinstance(value, SecretStr) and value.get_secret_value().strip():
+                values.append(value.get_secret_value())
+        return values
 
     @field_validator("cape_base_url", mode="before")
     @classmethod
@@ -109,6 +184,17 @@ class Settings(BaseSettings):
     def configured_services(self) -> dict[str, bool]:
         """Map every known service to whether it is enabled. Never exposes key values."""
         return {service: self.is_enabled(service) for service in SERVICE_FIELDS}
+
+
+def _parse_rate(service: str, rate: str) -> tuple[int, float]:
+    count, sep, seconds = rate.partition("/")
+    try:
+        parsed = int(count), float(seconds)
+    except ValueError:
+        parsed = (0, 0.0)
+    if not sep or parsed[0] <= 0 or parsed[1] <= 0:
+        raise ValueError(f"rate limit for {service} must look like 4/60, got {rate!r}")
+    return parsed
 
 
 @lru_cache(maxsize=1)

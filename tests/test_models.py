@@ -12,6 +12,8 @@ from phishlens.models import (
     AnalyzerResult,
     Attachment,
     CaseType,
+    EnrichmentResult,
+    EnrichmentStatus,
     Finding,
     IOCType,
     MitreTechnique,
@@ -232,3 +234,20 @@ def test_analysis_report_round_trip():
     assert restored.email.headers == report.email.headers
     assert restored.verdict == report.verdict
     assert restored.results == report.results
+
+
+def test_enrichment_result_roundtrip():
+    result = EnrichmentResult(
+        service="virustotal",
+        query="example.com",
+        status="malicious",
+        detections=5,
+        total_engines=90,
+        details={"categories": ["phishing"]},
+        link="https://www.virustotal.com/gui/domain/example.com",
+    )
+    assert result.status is EnrichmentStatus.MALICIOUS
+    assert EnrichmentResult.model_validate_json(result.model_dump_json()) == result
+    assert result.cached is False and result.error is None
+    with pytest.raises(ValidationError):
+        EnrichmentResult(service="x", query="y", status="bad")

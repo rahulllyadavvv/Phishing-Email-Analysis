@@ -13,7 +13,29 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from phishlens.config import get_settings
+from phishlens.enrichment import base as enrichment_base
 from phishlens.enrichment import dns as dns_helper
+
+
+@pytest.fixture(autouse=True)
+def enrichment_env(monkeypatch: pytest.MonkeyPatch, tmp_path) -> Iterator[list[float]]:
+    """Every test gets its own enrichment cache file, empty caches and rate limiters, and no
+    real waiting: sleeps in ``phishlens.enrichment.base`` return at once and are recorded in the
+    returned list."""
+    monkeypatch.setenv("ENRICHMENT_CACHE_PATH", str(tmp_path / "enrichment_cache.sqlite"))
+    get_settings.cache_clear()
+    enrichment_base.clear_cache()
+    enrichment_base.reset_limiters()
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(enrichment_base, "_sleep", fake_sleep)
+    yield sleeps
+    enrichment_base.clear_cache()
+    enrichment_base.reset_limiters()
+    get_settings.cache_clear()
 
 
 class FakeDns:

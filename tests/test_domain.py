@@ -488,7 +488,7 @@ async def test_registered_after_delivery_is_ignored(offline) -> None:
 async def test_rdap_unavailable_is_an_error_not_a_finding(offline) -> None:
     offline["zetatech.xyz"] = httpx.Response(503)
     result = await domain.analyze(_fixture2())
-    assert result.errors == ["rdap: zetatech.xyz: HTTP 503"]
+    assert result.errors == ["rdap: zetatech.xyz: HTTP 503 (after 4 attempts)"]
     assert not [f for f in result.findings if f.id.startswith("domain_age_")]
 
 

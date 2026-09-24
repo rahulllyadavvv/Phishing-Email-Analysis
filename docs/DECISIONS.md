@@ -517,3 +517,44 @@
   errors other than NXDOMAIN/no answer go into `errors`. `raw["mx"]` shows what was found.
 - The async checks (domain age, MX) run concurrently after the sync ones. Identity binding runs
   last, because it needs `raw["new_domains"]`.
+
+## P4.1: Base client, cache and rate limiting
+
+Plan reviewed and approved before building.
+
+- `EnrichmentResult` / `EnrichmentStatus` live in `phishlens/models.py`, because reports and the
+  API will carry them. There is one extra field beyond the plan: `error` (a message with secrets
+  removed).
+- `phishlens/enrichment/base.py`, `BaseClient`: subclasses set `service` (the settings name) and
+  implement lookups as `cached_lookup(kind, query, fetch)`. `kind` separates lookup types in the
+  cache key (`service:kind:normalized query`), and `normalize()` is per service. `cached_lookup`
+  never raises: any exception becomes status `error`. A missing key returns `not_configured`
+  before any cache or network access. `requires_key = False` for keyless services (RDAP).
+- `request()`: every attempt first takes a rate-limit token. 429, 5xx and `httpx.TransportError`
+  (timeouts, connection errors) are retried up to `ENRICHMENT_MAX_RETRIES` times. The wait is
+  `Retry-After` when it is given in seconds (capped at 60 s), else 1 s * 2^attempt + up to
+  0.5 s jitter. Other statuses (including 4xx) go back to the caller. When all attempts fail,
+  `EnrichmentError("<problem> (after N attempts)")` is raised.
+- Rate limiting: one token bucket per service per process (`get_limiter`), starting full. It has
+  no lock: `acquire` takes a token first (going negative to queue) and then sleeps, so there is no
+  `await` between check and update, and it works across event loops (each pytest test has its own).
+  Limits: `ENRICHMENT_RATE_LIMITS=service=count/seconds,...` over the defaults in `config.py`
+  (VirusTotal 4/60, AbuseIPDB 1000/86400, Hybrid Analysis 5/60, urlscan 60/60, RDAP 1/1,
+  abuse.ch, Safe Browsing and CAPE 10/1). Unknown services get 1/1.
+- Cache: in memory plus a SQLite table `enrichment_cache` in `ENRICHMENT_CACHE_PATH` (a separate
+  file from the DNS cache). The SQLite part can be turned off with `ENRICHMENT_CACHE=false`. Only
+  the normalized result JSON is stored, never raw responses. The TTL is
+  `ENRICHMENT_CACHE_TTL=service=seconds,...` (default 86400; 0 disables). `error` and
+  `not_configured` are never cached. A broken or unreadable cache file is ignored, as with DNS.
+- Secrets: `Settings.secret_values()` lists every configured `SecretStr`. Every error message is
+  scrubbed of them (`redact`) before it is stored or logged, which covers keys in URLs
+  (Safe Browsing `?key=`). Retry and failure log lines contain the service name, status and
+  attempt count, never a URL.
+- RDAP now uses `RdapClient(BaseClient)` (`service="rdap"`, no key). Its `EnrichmentResult` has
+  status `unknown` (RDAP gives registration data, not a verdict) and the data in `details`
+  (`rdap: ok|not_found`, registered, expires, registrar). `lookup_domain()` still returns
+  `RdapResult`, so the domain analyzer did not change. `RDAP_TIMEOUT_SECONDS` and
+  `RDAP_CACHE_TTL_SECONDS` were removed in favour of the generic `ENRICHMENT_*` settings.
+- Tests: an autouse fixture in `tests/conftest.py` gives every test its own cache file, empty
+  caches and limiters, and replaces `base._sleep` with a recorder, so retries and rate limits
+  never really wait.
