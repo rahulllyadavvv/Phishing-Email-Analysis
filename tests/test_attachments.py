@@ -348,3 +348,58 @@ async def test_pdf_links_become_extracted_urls() -> None:
         ("https://pdf.example.test/pay", "attachment")
     ]
     assert result.raw["attachments"][0]["pdf"]["pages"] == 1
+
+
+# --- Executables, shortcuts, images and YARA -----------------------------------------------------
+
+
+async def test_lnk_and_yara_findings() -> None:
+    from tests.test_binaries import make_lnk
+
+    lnk = make_lnk(r"C:\Windows\System32\mshta.exe", "https://hta.example.test/a.hta")
+    marked = b"notes " + b"PHISHLENS-YARA-TEST-MARKER"
+    email = ParsedEmail(
+        attachments=[make_attachment("invoice.pdf.lnk", lnk), make_attachment("n.txt", marked)]
+    )
+    result = await attachments.analyze(email, reputation=False)
+    findings = _ids(result)
+    assert findings["lnk_suspicious_command"].severity == Severity.CRITICAL
+    assert ("https://hta.example.test/a.hta", "attachment") in [
+        (u.url, u.source.value) for u in result.extracted_urls
+    ]
+    yara = findings["yara_match"]
+    assert yara.severity == Severity.MEDIUM  # from the rule's meta
+    assert yara.evidence["files"][0]["file"] == "n.txt"
+
+
+async def test_pe_attachment() -> None:
+    from tests.test_binaries import make_pe
+
+    email = ParsedEmail(attachments=[make_attachment("setup.exe", make_pe())])
+    result = await attachments.analyze(email, reputation=False)
+    assert _ids(result)["pe_executable_attachment"].severity == Severity.HIGH
+    assert result.raw["attachments"][0]["pe"]["valid_pe"] is True
+
+
+async def test_fixture_12_inline_image_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from phishlens.analyzers import binaries
+
+    monkeypatch.setattr(binaries, "qr_available", lambda: True)
+    monkeypatch.setattr(binaries, "decode_qr", lambda data: ["https://qr.example.test/x"])
+    looked_up: list[str] = []
+
+    async def fake(sha256: str) -> list:
+        looked_up.append(sha256)
+        return []
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    result = await attachments.analyze(_fixture("qr_code.eml"))
+    [row] = result.raw["attachments"]
+    assert row["inline"] is True and row["filename"] == "qrcode.png"
+    assert looked_up == []  # inline images: no reputation lookups
+    assert _ids(result)["qr_code_url"].evidence["files"][0]["urls"] == [
+        "hxxps://qr[.]example[.]test/x"
+    ]
+    assert [(u.url, u.source.value) for u in result.extracted_urls] == [
+        ("https://qr.example.test/x", "qr_code")
+    ]

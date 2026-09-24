@@ -18,6 +18,10 @@ encryption); PDFs through ``documents.analyze_pdf`` (JavaScript, automatic and l
 embedded files, links, QR codes in images); HTML and SVG through ``documents.analyze_html``
 (HTML smuggling, credential forms, SVG script, obfuscation). URLs found inside files are
 returned in ``extracted_urls`` (source "attachment", or "qr_code" for decoded QR codes).
+Executables go through ``binaries.analyze_pe``, shortcuts through ``binaries.analyze_lnk`` and
+images through ``binaries.analyze_image`` (QR codes). Every file is scanned with the YARA rules.
+Inline images (``email.inline_images``) get only the YARA and QR checks: no reputation lookups
+and no filename findings, since mails are full of harmless inline logos.
 
 Nothing is executed, opened or rendered. ``raw["attachments"]`` has one row per file and
 ``raw["archive_events"]`` what happened while unpacking. Findings are grouped per ID.
@@ -33,6 +37,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from phishlens.analyzers.archives import Budget, PasswordCandidate, unpack
+from phishlens.analyzers.binaries import analyze_image, analyze_lnk, analyze_pe, yara_scan
 from phishlens.analyzers.documents import (
     ContentReport,
     analyze_html,
@@ -40,7 +45,12 @@ from phishlens.analyzers.documents import (
     is_html_type,
     is_pdf_type,
 )
-from phishlens.analyzers.filetype import BIDI_CONTROLS, detect_type, filename_checks
+from phishlens.analyzers.filetype import (
+    BIDI_CONTROLS,
+    category_of_mime,
+    detect_type,
+    filename_checks,
+)
 from phishlens.analyzers.office import analyze_office, is_office_type
 from phishlens.config import get_settings
 from phishlens.data_loader import password_hints
@@ -197,6 +207,34 @@ FINDINGS: dict[str, tuple[Severity, str, str]] = {
         "Obfuscated script",
         "The script hides its behaviour (eval, unescape, long encoded strings).",
     ),
+    "pe_executable_attachment": (
+        Severity.HIGH,
+        "Windows executable attached",
+        "The file is a Windows program. Legitimate senders almost never email executables.",
+    ),
+    "pe_packed": (
+        Severity.MEDIUM,
+        "Executable is packed or encrypted",
+        "Packer section names or very high entropy show the program's code is compressed or "
+        "encrypted, which hides it from scanners.",
+    ),
+    "lnk_suspicious_command": (
+        Severity.CRITICAL,
+        "Shortcut runs a suspicious command",
+        "The shortcut starts a script host, a Windows tool abused by malware, or something on "
+        "a remote path when it is opened.",
+    ),
+    "qr_code_url": (
+        Severity.MEDIUM,
+        "Image contains a QR code",
+        "A QR code sends the victim to a link on their phone, outside the protection of the "
+        "mail filter (quishing).",
+    ),
+    "yara_match": (
+        Severity.HIGH,
+        "YARA rule matched",
+        "A file matches one or more YARA rules.",
+    ),
     "encrypted_archive_unopened": (
         Severity.HIGH,
         "Encrypted archive could not be opened",
@@ -301,13 +339,20 @@ def _add_findings(result: AnalyzerResult, grouped: dict[str, list[dict[str, Any]
 
 
 def _static_file_checks(
-    files: list[Attachment], events: list[dict[str, Any]], result: AnalyzerResult
+    files: list[Attachment],
+    events: list[dict[str, Any]],
+    result: AnalyzerResult,
+    inline: set[int] | None = None,
 ) -> None:
+    inline = inline or set()
     grouped: dict[str, list[dict[str, Any]]] = {}
     rows = []
-    for file in files:
+    for index, file in enumerate(files):
+        if index in inline:
+            rows.append({**_row(file, []), "inline": True})
+            continue
         flags = filename_checks(file.filename, file.detected_type, file.declared_type)
-        rows.append(_row(file, [flag for flag, _ in flags]))
+        rows.append({**_row(file, [flag for flag, _ in flags]), "inline": False})
         for flag, details in flags:
             grouped.setdefault(flag, []).append(
                 {"file": safe_name(file.filename), "sha256": file.sha256, **details}
@@ -359,7 +404,9 @@ def _summary(result: EnrichmentResult) -> dict[str, Any]:
 
 async def _check_reputation(result: AnalyzerResult) -> None:
     rows = result.raw.get("attachments", [])
-    hashes = list(dict.fromkeys(r["sha256"] for r in rows if r["size"] > 0))
+    hashes = list(
+        dict.fromkeys(r["sha256"] for r in rows if r["size"] > 0 and not r.get("inline"))
+    )
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_LOOKUPS)
 
     async def lookup(sha256: str) -> list[EnrichmentResult]:
@@ -408,6 +455,13 @@ def _content_analysis(
         return "pdf", analyze_pdf(file.data)
     if is_html_type(mime):
         return "html", analyze_html(file.data, mime)
+    category = category_of_mime(mime)
+    if category == "executable" and file.data[:2] == b"MZ":
+        return "pe", analyze_pe(file.data)
+    if category == "shortcut":
+        return "lnk", analyze_lnk(file.data)
+    if category == "image":
+        return "image", analyze_image(file.data)
     return None
 
 
@@ -424,8 +478,20 @@ async def _check_content(
             seen_urls.add(url)
             result.extracted_urls.append(UrlRef(url=url, source=source))
 
+    yara_hits: list[dict[str, Any]] = []
+    yara_errors: list[str] = []
     for file, row in zip(files, rows, strict=True):
         if row.get("deep_analysis_skipped"):
+            continue
+        matches, errors = await asyncio.to_thread(yara_scan, file.data)
+        yara_errors += [e for e in errors if e not in yara_errors]
+        if matches:
+            row["flags"].append("yara_match")
+            row["yara"] = matches
+            yara_hits += [
+                {"file": row["safe_name"], "sha256": file.sha256, **m} for m in matches
+            ]
+        if row.get("inline") and category_of_mime(file.detected_type) != "image":
             continue
         analysis = await asyncio.to_thread(_content_analysis, file, passwords)
         if analysis is None:
@@ -444,6 +510,24 @@ async def _check_content(
         for url in report.qr_urls:
             add_url(url, UrlSource.QR_CODE)
     _add_findings(result, grouped)
+    result.errors.extend(yara_errors)
+    if yara_hits:
+        order = ["info", "low", "medium", "high", "critical"]
+        worst = max(
+            (h["severity"] if h["severity"] in order else "high" for h in yara_hits),
+            key=order.index,
+        )
+        _, title, description = FINDINGS["yara_match"]
+        result.findings.append(
+            Finding(
+                id="yara_match",
+                module=MODULE,
+                title=title,
+                description=description,
+                severity=Severity(worst),
+                evidence={"files": yara_hits, "count": len(yara_hits)},
+            )
+        )
 
 
 async def analyze(
@@ -457,7 +541,7 @@ async def analyze(
     """
     start = time.perf_counter()
     result = AnalyzerResult(module=MODULE)
-    if not email.attachments:
+    if not email.attachments and not email.inline_images:
         result.skipped = True
         result.raw["attachments"] = []
         return result
@@ -467,7 +551,15 @@ async def analyze(
         passwords = body_passwords(email)
         result.raw["password_candidates"] = passwords
         files, events = await prepare_files(list(email.attachments), passwords)
-        _static_file_checks(files, events, result)
+        inline = [
+            image.model_copy(
+                update={"detected_type": image.detected_type or detect_type(image.data)}
+            )
+            for image in email.inline_images
+        ]
+        inline_indexes = set(range(len(files), len(files) + len(inline)))
+        files += inline
+        _static_file_checks(files, events, result, inline_indexes)
     except Exception as exc:
         result.errors.append(f"attachments: {type(exc).__name__}: {exc}")
     if reputation:

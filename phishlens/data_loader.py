@@ -24,6 +24,7 @@ __all__ = [
     "BrandRegistry",
     "Confusables",
     "Esp",
+    "ExecutableIndicators",
     "FileTypes",
     "PasswordHints",
     "Organization",
@@ -35,6 +36,7 @@ __all__ = [
     "domain_matches",
     "esp_for_domain",
     "esps",
+    "executable_indicators",
     "file_types",
     "free_webmail_domains",
     "is_free_webmail",
@@ -241,6 +243,15 @@ class FileTypes(_Model):
         return None
 
 
+class ExecutableIndicators(_Model):
+    """PE and LNK indicators (``data/executable_indicators.yaml``)."""
+
+    packer_sections: tuple[str, ...]
+    entropy_threshold: float = 7.2
+    suspicious_imports: tuple[str, ...]
+    lnk_commands: Names
+
+
 class PasswordHints(_Model):
     """Words introducing a password in an email body (``data/password_hints.yaml``)."""
 
@@ -256,6 +267,11 @@ class _UrlKeywords(_Model):
 @cache
 def file_types() -> FileTypes:
     return FileTypes.model_validate(load_yaml("file_types.yaml"))
+
+
+@cache
+def executable_indicators() -> ExecutableIndicators:
+    return ExecutableIndicators.model_validate(load_yaml("executable_indicators.yaml"))
 
 
 @cache
@@ -314,5 +330,5 @@ def is_risky_tld(domain: str | None) -> bool:
 def clear_cache() -> None:
     for fn in (load_yaml, esps, brand_registry, free_webmail_domains, risky_tlds,
                shortener_domains, confusables, url_allowlist, url_credential_keywords,
-               file_types, password_hints):
+               file_types, password_hints, executable_indicators):
         fn.cache_clear()

@@ -113,6 +113,9 @@ class Settings(BaseSettings):
         "jar", "com", "pif", "cpl", "dll",
     ]
 
+    # YARA rules folder (every *.yar / *.yara file is compiled); empty means data/yara.
+    yara_rules_dir: str | None = None
+
     # Enrichment HTTP clients (phishlens/enrichment/base.py).
     enrichment_timeout_seconds: float = Field(default=15.0, gt=0)
     enrichment_max_retries: int = Field(default=3, ge=0)

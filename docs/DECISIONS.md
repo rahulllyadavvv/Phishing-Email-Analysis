@@ -877,3 +877,43 @@ Plan reviewed and approved before building.
     only).
 - Tests build PDFs with pypdf (JavaScript/OpenAction, a page `/AA` Launch action, an embedded
   file, a link annotation) and use fixture 10. The QR-in-PDF test is skipped without zbar.
+
+## P6.5: Executables, shortcuts, images and YARA
+
+- `phishlens/analyzers/binaries.py`: `analyze_pe`, `analyze_lnk`, `analyze_image` (same report
+  shape as the other content analyzers) and `yara_scan`. The attachment analyzer routes by
+  detected type: executable with an `MZ` header -> PE, `application/x-ms-shortcut` -> LNK,
+  images -> QR. Tables live in `data/executable_indicators.yaml` (packer section names,
+  entropy threshold 7.2, suspicious imports, LNK command patterns).
+- PE (pefile, `fast_load` plus the import directory only): `pe_executable_attachment` (high)
+  for every valid PE, with DLL flag, whether a signature is present (security directory size
+  only; the signature is not validated), compile time (unusual before 2000 or in the future)
+  and suspicious imports (A/W suffixes folded). `pe_packed` (medium) for a packer section name
+  or a non-empty section with entropy of at least 7.2. An `MZ` file that pefile rejects gets no
+  PE finding (P6.1 already flags it by type) and `pe.valid_pe = false`.
+- LNK (LnkParse3): target (link info local base path, else common path suffix, else relative
+  path), arguments, working dir, icon. `lnk_suspicious_command` (critical) when target or
+  arguments contain a listed pattern (powershell, mshta, cmd /c, rundll32, regsvr32, wscript,
+  cscript, certutil, bitsadmin, curl, UNC `\\`, http(s)://, msiexec, forfiles). URLs in the
+  command become extracted URLs. Everything in evidence is defanged (`defang_text`).
+- Images: `qr_code_url` (medium) when a QR code is decoded; URL payloads are defanged in the
+  evidence and go to `extracted_urls` with source `qr_code`. Without zbar the image info records
+  `qr_decoding: unavailable`.
+- Inline images (`email.inline_images`) are now included as rows with `inline: true`, for YARA
+  and QR only: no reputation lookups (logos would waste quota) and no filename findings. This
+  is how fixture 12's QR image is reached. An email with only inline images is no longer
+  `skipped`.
+- YARA: every `*.yar`/`*.yara` in `YARA_RULES_DIR` (default `data/yara`) is compiled once
+  (cached; `clear_yara_cache()` resets). Each file is test-compiled first, and one that fails is
+  skipped and reported in `errors`, so a broken community file does not disable the rest. The
+  external variables `filename`, `filepath`, `extension` and `filetype` are defined as empty
+  strings for rules that use them. Scan timeout 10 s per file. Files that are
+  `deep_analysis_skipped` are not scanned. One `yara_match` finding lists every hit (rule,
+  namespace, tags, description, severity). Its severity is the worst `meta.severity` among the
+  hits (default high).
+- `data/yara/phishlens_example.yar` matches the harmless string `PHISHLENS-YARA-TEST-MARKER`,
+  and `data/yara/README.md` explains adding YARA-Forge / signature-base / Elastic rules. The EICAR
+  string is deliberately not used in a rule file, because desktop antivirus would quarantine it.
+- Test samples: a minimal PE32 (headers plus one section of zeros or random bytes, no code) and
+  a minimal LNK (header plus Unicode string data) are built in the tests. QR decoding on fixture
+  12 needs zbar and is skipped without it; the QR path is also tested with a mocked decoder.
