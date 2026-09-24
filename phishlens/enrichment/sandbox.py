@@ -17,6 +17,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from phishlens.enrichment.base import BaseClient, EnrichmentError, redact
+from phishlens.enrichment.network import CACHE_ONLY_REASON, fetch_enabled
 from phishlens.models import EnrichmentStatus, SandboxReport
 
 __all__ = ["HA_API_URL", "CapeClient", "HybridAnalysisClient", "SandboxClient"]
@@ -67,6 +68,8 @@ class SandboxClient(BaseClient, ABC):
         """Submit a file. Returns the task id, or a report with status not_configured/error."""
         if not self.enabled:
             return self._not_configured()
+        if not fetch_enabled():
+            return self._not_configured(CACHE_ONLY_REASON)
         blocked = self._submit_blocked()
         if blocked:
             return self._not_configured(blocked)
@@ -79,6 +82,8 @@ class SandboxClient(BaseClient, ABC):
         """Fetch the normalized report for ``task_id``. Never raises."""
         if not self.enabled:
             return self._not_configured()
+        if not fetch_enabled():
+            return self._not_configured(CACHE_ONLY_REASON)
         try:
             return await self._get_report(task_id)
         except Exception as exc:

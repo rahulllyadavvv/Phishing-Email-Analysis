@@ -16,6 +16,7 @@ import base64
 from typing import Any
 
 from phishlens.enrichment.base import BaseClient, EnrichmentError
+from phishlens.enrichment.network import CACHE_ONLY_REASON, fetch_enabled
 from phishlens.models import EnrichmentResult, EnrichmentStatus
 
 __all__ = ["API_URL", "GUI_URL", "MAX_UPLOAD_BYTES", "VirusTotalClient", "url_id"]
@@ -138,6 +139,10 @@ class VirusTotalClient(BaseClient):
             )
         if not self.enabled:
             return self.result(sha256, EnrichmentStatus.NOT_CONFIGURED)
+        if not fetch_enabled():
+            return self.result(
+                sha256, EnrichmentStatus.NOT_CONFIGURED, details={"reason": CACHE_ONLY_REASON}
+            )
         if len(data) > MAX_UPLOAD_BYTES:
             return self.result(
                 sha256, EnrichmentStatus.ERROR, error="file larger than 32 MB, not uploaded"

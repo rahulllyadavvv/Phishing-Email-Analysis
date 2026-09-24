@@ -1583,3 +1583,28 @@ Plan reviewed and approved before building.
 - **Paging.** 25 cases per page; any filter change goes back to page 1, and a page that no
   longer exists (after deletions) falls back to the last page.
 - `use_container_width` is deprecated in Streamlit 1.64; the UI uses `width="stretch"`.
+
+## P14.1: Evaluation harness
+
+- **Cache-only mode lives in the enrichment layer.** `phishlens.enrichment.network.cache_only()`
+  is a context variable like `offline()`. Inside it, cached answers are used, a cache miss comes
+  back `not_configured` with reason `cache only (no new API calls)`, `BaseClient.request` refuses
+  to send anything, and VirusTotal uploads, sandbox submissions/reports and the LLM tone check
+  are skipped. DNS (and RDAP only from its cache) stays as is: DNS lookups are not API calls.
+- **Positive class.** `phishing` is positive. Suspicious counts as phishing by default;
+  `--suspicious-as legit` changes that. A failed analysis is listed under errors and left out of
+  the confusion matrix rather than counted as either class.
+- **Module contribution** counts, per module, the verdicts where that module produced at least
+  one finding with positive points, split into correct and wrong verdicts.
+- **Manual agreement.** A `manual_verdict` that is a label (clean/suspicious/malicious) must match
+  the verdict exactly; a phishing/legit manual verdict is compared after the binary mapping.
+- **Threshold tuning re-scores, it does not re-analyze.** Each (suspicious, malicious) pair
+  builds a `RuleScorer` with those thresholds (for every case type) and scores deep copies of the
+  saved analyzer results, so override rules still apply and tuning costs no API calls. The table
+  shows the 15 best pairs by F1 (ties: lower false positive rate, then higher thresholds) plus
+  the current email thresholds, and a scatter plot shows precision against recall.
+- **Report.** HTML with the charts embedded as PNG data URIs (matplotlib, Agg backend) and a JSON
+  file with every number, both in `reports/evaluation/`. The HTML uses the report `finalize`
+  hook, so file names and finding titles are escaped and defanged; only the chart images bypass it.
+- The fixture labels are in `tests/fixtures/eval_labels.csv` (from `labels.yaml`: `clean` is
+  legit, everything else phishing; the expected verdict is the manual verdict).

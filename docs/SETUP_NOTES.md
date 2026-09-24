@@ -76,3 +76,19 @@ PDF reports are rendered by WeasyPrint, which needs Pango (`brew install pango` 
 Apple Silicon also `export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib`; `apt install
 libpango-1.0-0 libpangoft2-1.0-0` on Debian/Ubuntu). Without it, `--format pdf` prints "PDF
 skipped: ..." and every other format is still written; `test_pdf_is_a_pdf` is skipped.
+
+## P14.1: evaluation
+
+- `scripts/evaluate.py` needs matplotlib for its charts: `pip install -e ".[eval]"` (it is also
+  in the `dev` extra).
+- Quick run on the synthetic fixtures (no network):
+  `python scripts/evaluate.py tests/fixtures --labels tests/fixtures/eval_labels.csv --no-network --tune`.
+  Offline, SPF/DMARC and hash reputation are skipped, so `spoof_unaligned`, `eicar_attachment`,
+  `tracking_pixel` and (without zbar) `qr_code` come out Clean; with network (or the fake
+  internet in `tests/test_evaluate.py`) every fixture gets its expected verdict.
+- For a real dataset, put the emails in `samples/eval/` (gitignored) with a labels CSV
+  (`filename,label,manual_verdict,notes`). Run once with network to fill the enrichment cache,
+  then re-run with `--cached-only` (for example after changing weights) without spending API
+  quota. Reports go to `reports/evaluation/` (gitignored).
+- The 14 fixtures are far too few to tune thresholds on: `--tune` on them only shows that the
+  machinery works. Tune on a real, labelled dataset (see `scripts/prepare_datasets.md`).

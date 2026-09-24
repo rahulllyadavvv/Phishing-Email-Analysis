@@ -62,6 +62,9 @@ ml = [
 llm = [
     "anthropic",
 ]
+eval = [
+    "matplotlib",
+]
 dev = [
     "pytest",
     "pytest-asyncio",
@@ -70,6 +73,7 @@ dev = [
     "segno",
     "cryptography",
     "fakeredis",
+    "matplotlib",
 ]
 
 [tool.setuptools.packages.find]

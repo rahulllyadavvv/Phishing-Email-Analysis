@@ -33,7 +33,12 @@ from typing import Any, ClassVar
 import httpx
 
 from phishlens.config import Settings, get_settings
-from phishlens.enrichment.network import OFFLINE_REASON, network_enabled
+from phishlens.enrichment.network import (
+    CACHE_ONLY_REASON,
+    OFFLINE_REASON,
+    fetch_enabled,
+    network_enabled,
+)
 from phishlens.models import EnrichmentResult, EnrichmentStatus
 
 __all__ = [
@@ -255,6 +260,8 @@ class BaseClient:
         Returns the response for any status other than 429/5xx (the caller interprets 4xx).
         Raises ``EnrichmentError`` (secret-free message) when every attempt failed.
         """
+        if not fetch_enabled():
+            raise EnrichmentError(CACHE_ONLY_REASON)
         attempts = self.settings.enrichment_max_retries + 1
         limiter = get_limiter(self.service)
         problem = ""
@@ -308,6 +315,10 @@ class BaseClient:
         cached = _cache_get(self.settings, key, now)
         if cached is not None:
             return cached
+        if not fetch_enabled():
+            return self.result(
+                normalized, EnrichmentStatus.NOT_CONFIGURED, details={"reason": CACHE_ONLY_REASON}
+            )
         try:
             result = await fetch(normalized)
         except Exception as exc:
@@ -350,6 +361,12 @@ class BaseClient:
                 found[norm] = cached
             else:
                 missing.append(norm)
+        if missing and not fetch_enabled():
+            for norm in missing:
+                found[norm] = self.result(
+                    norm, EnrichmentStatus.NOT_CONFIGURED, details={"reason": CACHE_ONLY_REASON}
+                )
+            missing = []
         ttl = self.settings.cache_ttl(self.service)
         for start in range(0, len(missing), batch_size):
             chunk = missing[start : start + batch_size]

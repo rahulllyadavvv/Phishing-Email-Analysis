@@ -1,0 +1,15 @@
+filename,label,manual_verdict,notes
+clean_newsletter.eml,legit,clean,
+spoof_unaligned.eml,phishing,malicious,return_path_mismatch; spf_domain_unaligned; dmarc_fail; brand_impersonation
+display_name_trick.eml,phishing,suspicious,display_name_contains_email
+duplicate_from.eml,phishing,suspicious,duplicate_from_header
+link_mismatch.eml,phishing,malicious,link_text_href_mismatch; brand_impersonation
+lookalike_domain.eml,phishing,malicious,lookalike_domain; urgent_language; credential_request
+zip_attachment.eml,legit,clean,archive_attachment
+password_zip.eml,phishing,suspicious,encrypted_archive; password_in_body
+double_extension.eml,phishing,malicious,double_extension; executable_attachment
+html_smuggling.eml,phishing,malicious,html_smuggling
+tracking_pixel.eml,phishing,suspicious,tracking_pixel; hidden_text
+qr_code.eml,phishing,suspicious,qr_code_url
+forwarded_nested.eml,phishing,malicious,nested_message; return_path_mismatch; dmarc_fail
+eicar_attachment.eml,phishing,malicious,eicar_test_file

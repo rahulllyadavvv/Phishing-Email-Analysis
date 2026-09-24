@@ -206,3 +206,24 @@ def test_redact(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ABUSEIPDB_API_KEY", "ipdb-key")
     get_settings.cache_clear()
     assert base.redact("x ipdb-key y ipdb-key") == "x *** y ***"
+
+
+@respx.mock
+async def test_cache_only_answers_hits_and_skips_misses(keyed) -> None:
+    from phishlens.enrichment.network import CACHE_ONLY_REASON, cache_only
+
+    route = respx.get(API).respond(200, json={"hits": 3})
+    await _lookup()  # fills the cache
+    with cache_only():
+        hit = await _lookup()
+        miss = await _lookup("other.test")
+        with pytest.raises(EnrichmentError, match="cache only"):
+            await DemoClient().request("GET", API)
+        batch = await DemoClient().batch_lookup(
+            "domain", ["evil.test", "new.test"], lambda chunk: pytest.fail("fetched"), 10
+        )
+    assert hit.cached and hit.status == "malicious"
+    assert miss.status == "not_configured" and miss.details["reason"] == CACHE_ONLY_REASON
+    assert batch["evil.test"].cached and batch["new.test"].status == "not_configured"
+    assert route.call_count == 1
+    assert (await _lookup("other.test")).status == "malicious"  # switched off again
