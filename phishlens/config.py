@@ -141,6 +141,9 @@ class Settings(BaseSettings):
     scorer: str = "rule"
     scorer_model_path: str | None = None
 
+    # Sandbox even when hash reputation already says clean or suspicious (a hash nobody has
+    # flagged yet can still be new malware). Known-malicious files are never sandboxed again.
+    sandbox_known_clean_files: bool = True
     # Sandbox: how long to wait for a report and how often to poll.
     sandbox_max_wait_seconds: float = Field(default=300.0, gt=0)
     sandbox_poll_seconds: float = Field(default=15.0, gt=0)

@@ -25,8 +25,10 @@ Inline images (``email.inline_images``) get only the YARA and QR checks: no repu
 and no filename findings, since mails are full of harmless inline logos.
 
 Sandbox (``sandbox=True``): a file goes to the configured external sandbox (CAPE first, then
-Hybrid Analysis) only when hash reputation had no verdict and the file is high-risk or has a
-medium+ static finding; every other file records why it was skipped. Sandbox verdicts add
+Hybrid Analysis) when the file is high-risk or has a medium+ static finding and is not already
+known malicious. A clean or suspicious hash reputation does not stop it
+(``SANDBOX_KNOWN_CLEAN_FILES``, default on; off means only files without any reputation verdict
+go). Every file that is not submitted records why it was skipped. Sandbox verdicts add
 ``sandbox_malicious`` / ``sandbox_suspicious``; a clean run never removes static findings.
 Network indicators and dropped hashes are collected in ``raw["sandbox_iocs"]``.
 
@@ -591,7 +593,9 @@ def _sandbox_reason(row: dict[str, Any]) -> str | None:
         return "inline image"
     if row.get("deep_analysis_skipped"):
         return "already known malicious"
-    if row.get("reputation_verdict") not in _NO_REPUTATION_VERDICT:
+    if row.get("reputation_verdict") not in _NO_REPUTATION_VERDICT and not (
+        get_settings().sandbox_known_clean_files
+    ):
         return f"hash reputation already {row['reputation_verdict']}"
     risky = any(
         flag in FINDINGS

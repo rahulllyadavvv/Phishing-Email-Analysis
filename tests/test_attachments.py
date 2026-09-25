@@ -500,7 +500,23 @@ async def test_suspicious_and_clean_sandbox_results(sandbox) -> None:
     assert result.raw["attachments"][0]["sandbox"]["verdict"] == "clean"
 
 
-async def test_sandbox_skipped_when_reputation_known(sandbox, monkeypatch) -> None:
+@pytest.mark.parametrize("verdict", ["clean", "suspicious"])
+async def test_sandbox_runs_even_when_reputation_is_clean(sandbox, monkeypatch, verdict) -> None:
+    fake = sandbox()
+
+    async def fake_reputation(sha256: str) -> list[EnrichmentResult]:
+        return [_res("virustotal", verdict)]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake_reputation)
+    result = await attachments.analyze(_risky_email())
+    assert len(fake.submitted) == 1
+    assert result.raw["attachments"][0]["reputation_verdict"] == verdict
+    assert result.raw["attachments"][0]["sandbox"]["status"] == "done"
+
+
+async def test_sandbox_skipped_when_reputation_known_if_disabled(sandbox, monkeypatch) -> None:
+    monkeypatch.setenv("SANDBOX_KNOWN_CLEAN_FILES", "false")
+    get_settings.cache_clear()
     fake = sandbox()
 
     async def fake_reputation(sha256: str) -> list[EnrichmentResult]:

@@ -119,8 +119,11 @@ def test_empty_values_fall_back_to_defaults(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_env_file_is_loaded(tmp_path) -> None:
-    (tmp_path / ".env").write_text("URLSCAN_API_KEY=test-key-not-real\n")
-    assert Settings().is_enabled("urlscan")
+    env = tmp_path / ".env"
+    env.write_text("URLSCAN_API_KEY=test-key-not-real\n")
+    # conftest turns the default .env off (tests never read real keys); pass this one directly.
+    assert Settings(_env_file=env).is_enabled("urlscan")
+    assert not Settings().is_enabled("urlscan")
 
 
 def test_keys_are_not_exposed(monkeypatch: pytest.MonkeyPatch) -> None:

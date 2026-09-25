@@ -15,7 +15,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from phishlens.config import get_settings
+from phishlens.config import SERVICE_FIELDS, Settings, get_settings
 from phishlens.enrichment import abusech, rdap
 from phishlens.enrichment import base as enrichment_base
 from phishlens.enrichment import dns as dns_helper
@@ -23,6 +23,17 @@ from phishlens.parser import parse_email
 from phishlens.parser.received import originating_external_ip
 
 pytest_plugins = ["pytester"]
+
+
+@pytest.fixture(autouse=True)
+def no_real_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLAUDE.md: no real API keys in tests. The developer's ``.env`` is never read, and service
+    keys from the shell environment are removed, so every service starts disabled and a test
+    enables exactly what it needs with ``monkeypatch.setenv``."""
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    for field in (*SERVICE_FIELDS.values(), "cape_api_token", "phishlens_api_key"):
+        monkeypatch.delenv(field.upper(), raising=False)
+    get_settings.cache_clear()
 
 
 class NetworkBlockedError(RuntimeError):

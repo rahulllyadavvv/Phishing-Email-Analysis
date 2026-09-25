@@ -1666,3 +1666,20 @@ Plan reviewed and approved before building.
   magic-byte signature from `data/file_types.yaml` matches; then the signature wins. ZIP-based
   files are always opened to look for `vbaProject.bin`, also when libmagic already named an
   Office Open XML type, so macro documents are not missed.
+
+## Sandbox files with a clean hash reputation
+
+- Requested by the project owner: a risky attachment whose hash VirusTotal / MalwareBazaar
+  report as clean (or suspicious) still goes to the sandbox, because a hash nobody has flagged
+  yet can be new malware. New setting `SANDBOX_KNOWN_CLEAN_FILES` (default `true`); `false`
+  restores the old rule (only files without any reputation verdict are sandboxed).
+- Unchanged: files already known malicious are not re-sandboxed; a file still needs a
+  high-risk type or a medium+ static finding; at most 5 submissions per case; Hybrid Analysis
+  submissions still require `UPLOAD_FILES_TO_HYBRID_ANALYSIS=true`.
+
+## Tests never read .env
+
+- Creating a real `.env` with API keys made the suite try live lookups (the network guard
+  caught and failed them). An autouse fixture in `tests/conftest.py` now disables the `.env`
+  file and removes service keys from the environment for every test, so results do not depend
+  on the developer's keys (CLAUDE.md: no real API keys in tests).
