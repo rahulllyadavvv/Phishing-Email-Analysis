@@ -1683,3 +1683,12 @@ Plan reviewed and approved before building.
   caught and failed them). An autouse fixture in `tests/conftest.py` now disables the `.env`
   file and removes service keys from the environment for every test, so results do not depend
   on the developer's keys (CLAUDE.md: no real API keys in tests).
+
+## Fix: Hybrid Analysis moved off www
+
+- `www.hybrid-analysis.com` now answers every request with a 301 to `hybrid-analysis.com`.
+  httpx follows redirects, and a 301 turns a POST into a GET, so file submissions arrived as an
+  empty `GET /submit/file` and failed with HTTP 404 while GET calls (key info, reports) kept
+  working. The client now uses the bare domain, and a failed submission includes Hybrid
+  Analysis's own `message` in the error. Verified with a live submission of the harmless test PE
+  from `tests/test_binaries.make_pe` (report received, Windows 10 64-bit environment).

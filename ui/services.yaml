@@ -29,7 +29,7 @@ hybrid_analysis:
   name: Hybrid Analysis
   purpose: Sandbox reports for attachments
   setting: HYBRID_ANALYSIS_API_KEY
-  signup: https://www.hybrid-analysis.com/signup
+  signup: https://hybrid-analysis.com/signup
 cape:
   name: CAPE sandbox (self-hosted)
   purpose: Sandbox reports from your own CAPE instance

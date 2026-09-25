@@ -16,14 +16,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
+import httpx
+
 from phishlens.enrichment.base import BaseClient, EnrichmentError, redact
 from phishlens.enrichment.network import CACHE_ONLY_REASON, fetch_enabled
 from phishlens.models import EnrichmentStatus, SandboxReport
 
 __all__ = ["HA_API_URL", "CapeClient", "HybridAnalysisClient", "SandboxClient"]
 
-HA_API_URL = "https://www.hybrid-analysis.com/api/v2"
-HA_SITE_URL = "https://www.hybrid-analysis.com/sample"
+# The www. host now answers every request with a 301 to the bare domain; following that
+# redirect turns the POST of a submission into a GET (HTTP 404), so use the bare domain.
+HA_API_URL = "https://hybrid-analysis.com/api/v2"
+HA_SITE_URL = "https://hybrid-analysis.com/sample"
 
 # Hybrid Analysis verdict -> normalized status.
 _HA_VERDICTS = {
@@ -100,6 +104,15 @@ class SandboxClient(BaseClient, ABC):
     async def _get_report(self, task_id: str) -> SandboxReport: ...
 
 
+def _api_message(response: httpx.Response) -> str:
+    """Hybrid Analysis's own explanation of an error (``{"message": ...}``), if it sent one."""
+    try:
+        message = response.json().get("message")
+    except (ValueError, AttributeError):
+        return ""
+    return f" ({str(message)[:200]})" if message else ""
+
+
 class HybridAnalysisClient(SandboxClient):
     service = "hybrid_analysis"
 
@@ -126,7 +139,9 @@ class HybridAnalysisClient(SandboxClient):
             files={"file": (filename, data)},
         )
         if response.status_code not in (200, 201):
-            raise EnrichmentError(f"submit failed: HTTP {response.status_code}")
+            raise EnrichmentError(
+                f"submit failed: HTTP {response.status_code}{_api_message(response)}"
+            )
         job_id = response.json().get("job_id")
         if not job_id:
             raise EnrichmentError("submit response had no job_id")

@@ -131,7 +131,7 @@ Put keys in `.env` (see `.env.example`). A missing key disables only that servic
 | Google Safe Browsing | phishing and malware URL lists | `GOOGLE_SAFEBROWSING_API_KEY` | <https://developers.google.com/safe-browsing/v4/get-started> | Free with a Google Cloud project; non-commercial use |
 | urlscan.io | remote page scan, screenshot, final URL | `URLSCAN_API_KEY` | <https://urlscan.io/user/signup> | Daily scan quotas; scans default to *unlisted* here |
 | AbuseIPDB | sending IP reputation | `ABUSEIPDB_API_KEY` | <https://www.abuseipdb.com/register> | About 1,000 checks/day |
-| Hybrid Analysis | sandbox reports | `HYBRID_ANALYSIS_API_KEY` | <https://www.hybrid-analysis.com/signup> | Free account; uploads need `UPLOAD_FILES_TO_HYBRID_ANALYSIS=true` |
+| Hybrid Analysis | sandbox reports | `HYBRID_ANALYSIS_API_KEY` | <https://hybrid-analysis.com/signup> | Free account; uploads need `UPLOAD_FILES_TO_HYBRID_ANALYSIS=true` |
 | CAPE | your own sandbox | `CAPE_BASE_URL` | <https://github.com/kevoreilly/CAPEv2> | Self-hosted |
 | Claude (Anthropic) | optional second opinion on tone | `LLM_API_KEY` + `LLM_TONE_ENABLED=true` | <https://console.anthropic.com/> | Pay per use; sends the email text to Anthropic |
 

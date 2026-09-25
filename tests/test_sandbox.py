@@ -99,7 +99,7 @@ async def test_ha_submit_and_report(monkeypatch: pytest.MonkeyPatch) -> None:
     assert report.network_urls == ["http://c2.bad.test/gate.php"]
     assert report.dropped_hashes == ["e" * 64]
     assert report.signatures == ["Contacts a C2 server"]
-    assert report.link == f"https://www.hybrid-analysis.com/sample/{SHA256}/160"
+    assert report.link == f"https://hybrid-analysis.com/sample/{SHA256}/160"
 
 
 @pytest.mark.parametrize(
@@ -215,3 +215,22 @@ async def test_cape_not_configured() -> None:
     async with CapeClient() as cape:
         assert (await cape.get_report("1")).status == "not_configured"
         assert (await cape.submit(FILE, "x")).status == "not_configured"
+
+
+def test_ha_uses_the_bare_domain() -> None:
+    # www. redirects with a 301, which turns the submission POST into a GET (HTTP 404).
+    assert HA_API_URL.startswith("https://hybrid-analysis.com/")
+
+
+@respx.mock
+async def test_ha_submit_error_includes_the_api_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    _configure(
+        monkeypatch, HYBRID_ANALYSIS_API_KEY=HA_KEY, UPLOAD_FILES_TO_HYBRID_ANALYSIS="true"
+    )
+    respx.post(f"{HA_API_URL}/submit/file").respond(
+        403, json={"message": "This API key cannot submit files."}
+    )
+    async with HybridAnalysisClient() as client:
+        report = await client.submit(b"MZ", "a.exe")
+    assert report.status == "error"
+    assert report.error == "submit failed: HTTP 403 (This API key cannot submit files.)"
