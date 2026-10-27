@@ -1,4 +1,4 @@
-# Phishing Email Analysis
+# Phishlense (Phishing Email Analysis)
 
 **A SOC-analyst-style phishing triage portfolio — 6 real-world email samples, each investigated end-to-end with full IOC extraction and MITRE ATT&CK mapping.**
 
