@@ -18,3 +18,4 @@ models/
 
 # MITRE ATT&CK data (scripts/update_attack_data.py, ~45 MB)
 data/mitre/*.json
+.DS_Store
