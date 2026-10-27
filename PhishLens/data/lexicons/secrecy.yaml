@@ -1,0 +1,22 @@
+# Secrecy: asks the victim to keep the request private or away from normal channels.
+finding_id: secrecy_request
+severity: medium
+cap: 5
+phrases:
+  - keep this confidential
+  - keep this between us
+  - strictly confidential
+  - do not tell anyone
+  - don't tell anyone
+  - do not share this
+  - don't discuss this
+  - do not call
+  - i am in a meeting
+  - i'm in a meeting
+  - reply only by email
+  - kisi ko na batayein
+  - kisi ko mat batana
+  - किसी को न बताएं
+patterns:
+  - "(do\\s+not|don'?t)\\s+(tell|inform|discuss\\s+with|share\\s+with)\\s+(anyone|anybody|colleagues|others|your\\s+manager)"
+  - "(quick|small|urgent)\\s+favou?r"

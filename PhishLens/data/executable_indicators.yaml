@@ -1,0 +1,48 @@
+# Indicators for Windows executables (PE) and shortcut (.lnk) files.
+#
+# packer_sections: section names left by common packers/protectors (compared case-insensitively).
+# suspicious_imports: API functions used for injection, downloading and running code. Listed in
+#   the report when a PE imports them (A/W suffixes are matched automatically).
+# lnk_commands: substrings in a shortcut's target or arguments that mean it runs a
+#   living-off-the-land binary, a script host or something remote. Lowercase.
+# Add entries to any list; keep them lowercase except section names.
+packer_sections: [UPX0, UPX1, UPX2, .aspack, .adata, .MPRESS1, .MPRESS2, .petite, .themida, .vmp0, .vmp1, .enigma1, .nsp0, .nsp1, .packed, .perplex, .yP]
+entropy_threshold: 7.2
+suspicious_imports:
+  - VirtualAlloc
+  - VirtualAllocEx
+  - VirtualProtect
+  - WriteProcessMemory
+  - CreateRemoteThread
+  - NtUnmapViewOfSection
+  - SetThreadContext
+  - QueueUserAPC
+  - URLDownloadToFile
+  - InternetOpenUrl
+  - WinHttpOpen
+  - WinExec
+  - ShellExecute
+  - CreateProcess
+  - IsDebuggerPresent
+  - CryptEncrypt
+  - SetWindowsHookEx
+  - GetAsyncKeyState
+lnk_commands:
+  - powershell
+  - pwsh
+  - mshta
+  - "cmd /c"
+  - "cmd.exe /c"
+  - "cmd /k"
+  - rundll32
+  - regsvr32
+  - wscript
+  - cscript
+  - certutil
+  - bitsadmin
+  - curl
+  - "\\\\"
+  - "http://"
+  - "https://"
+  - msiexec
+  - forfiles

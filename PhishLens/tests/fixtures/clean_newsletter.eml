@@ -1,0 +1,42 @@
+Return-Path: <bounce@newsletter.example>
+Received: from mail.newsletter.example ([198.51.100.10]) by
+ mx.recipient.example with ESMTPS id clean-ne; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=newsletter.example; dkim=pass header.d=newsletter.example;
+ dmarc=pass header.from=newsletter.example
+From: Example News <news@newsletter.example>
+To: reader@recipient.example
+Subject: Your September community newsletter
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <clean-newsletter-0001@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+ boundary="==phishlens-clean_newsletter-0=="
+List-Unsubscribe: <https://www.newsletter.example/unsubscribe>
+
+--==phishlens-clean_newsletter-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Hello reader,
+
+Here is what happened in the community this month: a new park opened, the lib=
+rary
+extended its hours and the local choir is looking for new members.
+
+Read more at https://www.newsletter.example/september
+
+You can unsubscribe at any time from your account settings.
+
+--==phishlens-clean_newsletter-0==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><p>Hello reader,</p><p>Here is what happened in the community thi=
+s month: a new park opened, the library extended its hours and the local choi=
+r is looking for new members.</p><p><a href=3D"https://www.newsletter.example=
+/september">https://www.newsletter.example/september</a></p><p>You can unsubs=
+cribe at any time from your account settings.</p></body></html>
+
+--==phishlens-clean_newsletter-0==--

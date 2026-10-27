@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.autopilot/
+.env
+samples/
+quarantine/
+reports/
+*.sqlite
+*.sqlite3
+*.egg-info/
+autopilot_run.log
+
+# Trained models (scripts/train_tone_model.py)
+models/
+
+# MITRE ATT&CK data (scripts/update_attack_data.py, ~45 MB)
+data/mitre/*.json
+.DS_Store

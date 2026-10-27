@@ -1,0 +1,17 @@
+# X-Mailer / User-Agent values of bulk-mailing and spam tools that legitimate organisations rarely
+# use. Each entry is a case-insensitive regular expression matched against the X-Mailer,
+# User-Agent and X-MimeOLE headers. Add a pattern and a short name.
+mailers:
+  - {name: Leaf PHPMailer, pattern: "leaf\\s*phpmailer"}
+  - {name: Gammadyne Mass E-Mailer, pattern: "gammadyne"}
+  - {name: Atomic Mail Sender, pattern: "atomic\\s*mail\\s*sender"}
+  - {name: SendBlaster, pattern: "sendblaster"}
+  - {name: Advanced Mass Sender, pattern: "advanced\\s*mass\\s*sender"}
+  - {name: Turbo Mailer, pattern: "turbo\\s*mailer"}
+  - {name: Group Mail, pattern: "group\\s*mail"}
+  - {name: Mass Mailer, pattern: "mass\\s*mail"}
+  - {name: The Bat! (old), pattern: "the\\s*bat!\\s*\\(v[1-3]\\."}
+  - {name: PHP mail script, pattern: "^php/\\d"}
+  - {name: Python smtplib default, pattern: "^python"}
+  - {name: Microsoft CDO for Windows 2000, pattern: "microsoft\\s*cdo\\s*for\\s*windows\\s*2000"}
+  - {name: Outlook Express 6 (very old), pattern: "microsoft\\s*outlook\\s*express\\s*6\\.00\\.2600"}

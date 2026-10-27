@@ -1,0 +1,25 @@
+# URL shortener domains: they hide the real destination of a link. Add one domain per line
+# (lowercase). Subdomains are matched automatically.
+domains:
+  - bit.ly
+  - bitly.com
+  - tinyurl.com
+  - t.co
+  - goo.gl
+  - ow.ly
+  - is.gd
+  - v.gd
+  - buff.ly
+  - rebrand.ly
+  - cutt.ly
+  - shorturl.at
+  - rb.gy
+  - t.ly
+  - tiny.cc
+  - bl.ink
+  - s.id
+  - lnkd.in
+  - qrco.de
+  - short.gy
+  - shorte.st
+  - adf.ly

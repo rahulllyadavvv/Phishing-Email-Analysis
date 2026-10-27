@@ -1,0 +1,51 @@
+Return-Path: <it-security@mfa-update.example>
+Received: from mail.mfa-update.example ([203.0.113.120]) by
+ mx.recipient.example with ESMTPS id qr-code-; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=mfa-update.example; dkim=pass header.d=mfa-update.example;
+ dmarc=pass header.from=mfa-update.example
+From: IT Security <it-security@mfa-update.example>
+To: user@recipient.example
+Subject: Action required: re-enrol multi-factor authentication
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <qr-code-0012@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="==phishlens-qr_code-0=="
+
+--==phishlens-qr_code-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+Your MFA enrolment expires today. Scan the QR code with your phone to re-enro=
+l.
+
+--==phishlens-qr_code-0==
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="==phishlens-qr_code-1=="
+
+--==phishlens-qr_code-1==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+<html><body><p>Your MFA enrolment expires today.</p><p>Scan the QR code with =
+your phone to re-enrol:</p><img src=3D"cid:qrcode@phishlens.test" alt=3D"QR c=
+ode"></body></html>
+
+--==phishlens-qr_code-1==
+Content-Type: image/png
+Content-Transfer-Encoding: base64
+Content-Disposition: inline; filename="qrcode.png"
+Content-ID: <qrcode@phishlens.test>
+MIME-Version: 1.0
+
+iVBORw0KGgoAAAANSUhEUgAAAN4AAADeAQAAAAB6HIMaAAABTUlEQVR42u2Y0Q0DIQxDozIAI7E6
+I90ASGlsc+1X+1tXAp1OqPl5lzoOIfLzWnGCJ+gbDKyxekbPdkU9tVoFH/Fl/SII2gLLa7Sc+oJ2
+Df1oSot8jnqvGNpXqs1ps3JbnH3+B+0lVZDZmZa6ZZVN1Je3buUJlK4ea0+4FxS7qIFtb5a0K+AG
+og1sUhq2pa2+ID1Qt+FcZYXK9JITe7qZsW7LEIoQZgt4vI1zO3duk5sO3TZj3cpgqYTqDrGMdbtY
+X8mmAHL0X18lULR0LQmgCq1PawcLaoDM6L/GtOwFU0kOmoNzL8O/T91KAHJdY7+dGhyKmY/czNjB
+6ANCVfNN7zOYTrbyLmcHi9tv2z3pOOf2NfOy546mecd7Lls4zAD4rWdjWg07+w7EPreadnGrgM6b
+5jNvhG4/dq2ltycUqo6LlMFM95n33Gue4L8En/9zHz02LxTfAAAAAElFTkSuQmCC
+
+--==phishlens-qr_code-1==--
+
+--==phishlens-qr_code-0==--

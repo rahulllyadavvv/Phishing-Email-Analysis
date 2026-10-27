@@ -1,0 +1,545 @@
+"""Tests for phishlens.analyzers.domain."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import dns.exception
+import httpx
+import pytest
+import respx
+
+from phishlens import data_loader
+from phishlens.analyzers import domain, header
+from phishlens.analyzers.domain import find_brand_mentions
+from phishlens.enrichment import rdap
+from phishlens.models import AnalyzerResult, Severity
+from phishlens.parser import parse_email
+
+FIXTURES = Path(__file__).parent / "fixtures"
+ALL_FIXTURES = sorted(p.name for p in FIXTURES.glob("*.eml"))
+
+
+@pytest.fixture(autouse=True)
+def offline(fake_dns) -> Iterator[dict[str, httpx.Response]]:
+    """Empty DNS and an RDAP mock. Tests put ``domain -> Response`` into the returned dict;
+    other domains get 404."""
+    fake_dns({})
+    rdap.clear_cache()
+    answers: dict[str, httpx.Response] = {}
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        return answers.get(request.url.path.rsplit("/", 1)[-1]) or httpx.Response(404)
+
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__startswith=rdap.RDAP_BOOTSTRAP_URL).mock(side_effect=reply)
+        yield answers
+    rdap.clear_cache()
+
+
+def _email(headers: str):
+    raw = headers.strip().replace("\n", "\r\n") + "\r\nSubject: hi\r\n\r\nbody\r\n"
+    return parse_email(raw.encode())
+
+
+def _ids(result) -> dict:
+    return {f.id: f for f in result.findings}
+
+
+async def _analyze(headers: str):
+    return await domain.analyze(_email(headers))
+
+
+# --- Display-name brand spoofing -----------------------------------------------------------------
+
+
+async def test_paypal_security_from_gmail_is_flagged() -> None:
+    result = await _analyze('From: "PayPal Security" <x@gmail.com>')
+    finding = _ids(result)["display_name_brand_spoof"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["brand"] == "PayPal"
+    assert finding.evidence["free_webmail"] is True
+    assert "paypal.com" in finding.evidence["legitimate_domains"]
+
+
+async def test_brand_from_unrelated_domain_is_flagged() -> None:
+    result = await _analyze("From: Microsoft Support <security@micros0ft-support.example>")
+    finding = _ids(result)["display_name_brand_spoof"]
+    assert finding.evidence["brand"] == "Microsoft"
+    assert finding.evidence["free_webmail"] is False
+
+
+@pytest.mark.parametrize(
+    "from_header",
+    [
+        "From: PayPal <service@paypal.com>",
+        "From: PayPal <service@mail.paypal.com>",
+        "From: Google <no-reply@accounts.google.com>",
+        "From: Alice Smith <alice@gmail.com>",
+        "From: Upstairs Groups <team@company.example>",
+    ],
+)
+async def test_no_display_name_spoof(from_header: str) -> None:
+    assert "display_name_brand_spoof" not in _ids(await _analyze(from_header))
+
+
+async def test_brand_domain_that_is_free_webmail_is_still_spoof() -> None:
+    """outlook.com belongs to Microsoft, but anyone can register an address there."""
+    result = await _analyze("From: Microsoft Account Team <helpdesk@outlook.com>")
+    assert _ids(result)["display_name_brand_spoof"].evidence["free_webmail"] is True
+
+
+def test_find_brand_mentions_whole_words_and_phrases() -> None:
+    assert [m.brand.name for m in find_brand_mentions("Your PayPal account")] == ["PayPal"]
+    assert [m.keyword for m in find_brand_mentions("Office-365 alert")] == ["office 365"]
+    assert [m.brand.name for m in find_brand_mentions("STATE BANK OF INDIA")] == [
+        "State Bank of India"
+    ]
+    assert find_brand_mentions("groups and startups") == []
+    assert find_brand_mentions("") == []
+
+
+def test_organization_counts_as_a_brand(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    (tmp_path / "brand_registry.yaml").write_text(
+        "organization:\n  name: Acme Corp\n  domains: [acme.test]\n"
+        "brands:\n  - name: PayPal\n    keywords: [paypal]\n    legitimate_domains: [paypal.com]\n"
+    )
+    monkeypatch.setattr(data_loader, "DATA_DIR", tmp_path)
+    data_loader.clear_cache()
+    try:
+        [mention] = find_brand_mentions("Acme Corp IT desk")
+        assert mention.brand.name == "Acme Corp"
+        assert mention.brand.legitimate_domains == ("acme.test",)
+    finally:
+        data_loader.clear_cache()
+
+
+# --- Domain consistency --------------------------------------------------------------------------
+
+
+async def test_replyto_mismatch_and_free_webmail_from_corporate_domain() -> None:
+    result = await _analyze(
+        "From: CFO <cfo@company.example>\nReply-To: cfo.company@gmail.com"
+    )
+    findings = _ids(result)
+    assert findings["replyto_mismatch"].severity == Severity.MEDIUM
+    free = findings["replyto_free_webmail"]
+    assert free.severity == Severity.HIGH
+    assert free.evidence["reply_to"] == "cfo.company@gmail.com"
+    assert free.evidence["from_is_free_webmail"] is False
+
+
+async def test_replyto_free_webmail_is_medium_when_from_is_webmail() -> None:
+    result = await _analyze("From: a@yahoo.com\nReply-To: b@gmail.com")
+    assert _ids(result)["replyto_free_webmail"].severity == Severity.MEDIUM
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        "From: a@company.example\nReply-To: support@help.company.example",
+        "From: a@gmail.com\nReply-To: a@gmail.com",
+        "From: a@company.example",
+    ],
+)
+async def test_no_replyto_findings(headers: str) -> None:
+    findings = _ids(await _analyze(headers))
+    assert "replyto_mismatch" not in findings
+    assert "replyto_free_webmail" not in findings
+
+
+async def test_returnpath_mismatch() -> None:
+    result = await domain.analyze(parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes()))
+    finding = _ids(result)["returnpath_mismatch"]
+    assert finding.severity == Severity.LOW
+    assert finding.evidence["return_path_domain"] == "zetatech.xyz"
+    assert finding.evidence["from_domain"] == "microsoft.com"
+
+
+async def test_returnpath_on_esp_is_info() -> None:
+    result = await _analyze(
+        "Return-Path: <bounce-123@em.sendgrid.net>\nFrom: News <news@company.example>"
+    )
+    finding = _ids(result)["returnpath_mismatch"]
+    assert finding.severity == Severity.INFO
+    assert finding.evidence["esp"] == "SendGrid"
+
+
+async def test_same_org_return_path_is_fine() -> None:
+    result = await _analyze(
+        "Return-Path: <bounce@mail.company.example>\nFrom: a@company.example"
+    )
+    assert "returnpath_mismatch" not in _ids(result)
+
+
+async def test_domain_table() -> None:
+    result = await _analyze(
+        "Return-Path: <b@zetatech.xyz>\nFrom: PayPal <x@gmail.com>\n"
+        "Reply-To: r@paypal.com\nSender: s@gmail.com"
+    )
+    rows = {r["role"]: r for r in result.raw["domain_table"]}
+    assert set(rows) == {"from", "return_path", "reply_to", "sender"}
+    assert rows["from"]["free_webmail"] is True and rows["from"]["matches_from"] is True
+    assert rows["return_path"]["risky_tld"] is True
+    assert rows["return_path"]["matches_from"] is False
+    assert rows["reply_to"]["brand"] == "PayPal"
+    assert rows["sender"]["matches_from"] is True
+
+
+async def test_no_from() -> None:
+    result = await domain.analyze(parse_email(b"Subject: x\r\n\r\nbody"))
+    assert result.findings == [] and result.errors == []
+    assert result.raw["domain_table"] == []
+
+
+async def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(*args: object) -> None:
+        raise RuntimeError("data exploded")
+
+    monkeypatch.setattr(domain, "find_brand_mentions", boom)
+    result = await _analyze('From: "PayPal" <x@gmail.com>')
+    assert result.errors == [
+        "display_name: RuntimeError: data exploded",
+        "identity: RuntimeError: data exploded",
+    ]
+
+
+@pytest.mark.parametrize("name", ALL_FIXTURES)
+async def test_every_fixture(name: str) -> None:
+    result = await domain.analyze(parse_email((FIXTURES / name).read_bytes()))
+    assert result.errors == []
+
+
+# --- Lookalike domains ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("candidate", "brand", "kind"),
+    [
+        ("micros0ft.com", "Microsoft", "homoglyph"),
+        ("paypa1.com", "PayPal", "homoglyph"),
+        ("xn--pple-43d.com", "Apple", "homoglyph"),  # Cyrillic "а" + "pple"
+        ("xn--80ak6aa92e.com", "Apple", "homoglyph"),  # fully Cyrillic "аррӏе"
+        ("rnicrosoft.com", "Microsoft", "homoglyph"),
+        ("paypal-secure-login.net", "PayPal", "combosquat"),
+        ("microsoft-support-login.example", "Microsoft", "combosquat"),
+        ("micros0ft-support.example", "Microsoft", "combosquat"),
+        ("paypalsecure.com", "PayPal", "combosquat"),
+        ("gooogle.com", "Google", "typosquat"),
+        ("netflx.com", "Netflix", "typosquat"),
+        ("paypal.net", "PayPal", "tld_swap"),
+        ("paypal.com.account-check.example", "PayPal", "brand_in_subdomain"),
+        ("0ffice.com", "Microsoft", "homoglyph"),
+    ],
+)
+def test_check_lookalike_detects(candidate: str, brand: str, kind: str) -> None:
+    matches = domain.check_lookalike(candidate)
+    assert [(m.brand, m.kind) for m in matches][:1] == [(brand, kind)]
+    assert matches[0].legitimate_domain
+
+
+def test_idn_is_decoded() -> None:
+    [match] = domain.check_lookalike("xn--pple-43d.com")
+    assert match.decoded == "аpple.com"
+    assert match.legitimate_domain == "apple.com"
+    assert domain.check_lookalike("аpple.com")[0].domain == "xn--pple-43d.com"
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "microsoft.com",
+        "login.microsoftonline.com",
+        "mail.paypal.com",
+        "apple.com",
+        "example.com",
+        "company.example",
+        "purchase.com",  # contains "chase"
+        "pineapple.com",  # contains "apple"
+        "home-office.co.uk",  # "office" is a generic label
+        "live-events.com",
+        "apply.com",  # one edit from "apple", but too short for typo matching
+        "groups.com",
+        "localhost",
+        "",
+    ],
+)
+def test_check_lookalike_ignores(candidate: str) -> None:
+    assert domain.check_lookalike(candidate) == []
+
+
+def test_one_match_per_brand_strongest_kind() -> None:
+    matches = domain.check_lookalike("paypa1-paypal.com")
+    assert [(m.brand, m.kind) for m in matches] == [("PayPal", "combosquat")]
+    assert all(m.brand != "PayPal" or m.kind == "combosquat" for m in matches)
+
+
+def test_skeleton_and_decode_idn() -> None:
+    assert domain.skeleton("PayPa1") == domain.skeleton("paypal")
+    assert domain.skeleton("rnicros0ft") == domain.skeleton("microsoft")
+    assert domain.decode_idn("xn--pple-43d.com") == "аpple.com"
+    assert domain.decode_idn("xn--invalid-.com") == "xn--invalid-.com"
+
+
+async def test_fixture_6_lookalike_finding() -> None:
+    result = await domain.analyze(parse_email((FIXTURES / "lookalike_domain.eml").read_bytes()))
+    finding = _ids(result)["lookalike_domain"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["domain"] == "micros0ft-support.example"
+    assert set(finding.evidence["roles"]) == {"from", "return_path"}
+    assert finding.evidence["matches"][0]["brand"] == "Microsoft"
+    assert "micros0ft-support.example" in result.raw["lookalikes"]
+
+
+async def test_punycode_domain_findings() -> None:
+    result = await _analyze("From: Apple <id@xn--pple-43d.com>\nReply-To: a@xn--mnchen-3ya.test")
+    punycode = [f for f in result.findings if f.id == "punycode_domain"]
+    severities = {f.evidence["domain"]: f.severity for f in punycode}
+    assert severities == {"xn--pple-43d.com": Severity.HIGH, "xn--mnchen-3ya.test": Severity.MEDIUM}
+    assert _ids(result)["lookalike_domain"].evidence["decoded"] == "аpple.com"
+
+
+async def test_no_lookalike_for_genuine_sender(fake_dns) -> None:
+    fake_dns({("accountprotection.microsoft.com", "MX"): ["10 mx.microsoft.com"]})
+    result = await _analyze("From: Microsoft <no-reply@accountprotection.microsoft.com>")
+    assert result.findings == []
+    assert result.raw["lookalikes"] == {}
+
+
+
+# --- Identity binding ----------------------------------------------------------------------------
+
+
+def _header_context(dmarc_aligned: bool) -> dict:
+    summary = [{"mechanism": "dmarc", "result": "pass", "domain": "x", "aligned": dmarc_aligned}]
+    return {"header": AnalyzerResult(module="header", raw={"auth_summary": summary})}
+
+
+def _impersonation(result) -> list:
+    return [f for f in result.findings if f.id == "brand_impersonation"]
+
+
+async def test_fixture_6_brand_impersonation_is_critical() -> None:
+    email = parse_email((FIXTURES / "lookalike_domain.eml").read_bytes())
+    result = await domain.analyze(email, _header_context(dmarc_aligned=True))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["brand"] == "Microsoft"
+    assert set(finding.evidence["claimed_in"]) >= {"display_name", "lookalike"}
+    assert finding.evidence["sender_domain"] == "micros0ft-support.example"
+    assert finding.evidence["authenticated"] is True
+    assert finding.evidence["lookalike"] is True
+    assert result.raw["identity"]["claimed_brands"]["Microsoft"][0] == "display_name"
+
+
+async def test_lookalike_with_fully_passing_auth_is_flagged(fake_dns) -> None:
+    """Real header analysis: SPF and DMARC pass for micros0ft-support.example itself."""
+    fake_dns(
+        {
+            ("micros0ft-support.example", "TXT"): ["v=spf1 ip4:203.0.113.0/24 -all"],
+            ("_dmarc.micros0ft-support.example", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    email = parse_email((FIXTURES / "lookalike_domain.eml").read_bytes())
+    header_result = await header.analyze(email)
+    assert header_result.raw["dmarc"]["result"] == "pass"
+    result = await domain.analyze(email, {"header": header_result})
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.CRITICAL
+
+
+async def test_genuine_microsoft_mail_is_not_flagged(fake_dns, dkim_key) -> None:
+    fake_dns(
+        {
+            ("sel._domainkey.microsoft.com", "TXT"): [dkim_key.dns_record],
+            ("_dmarc.microsoft.com", "TXT"): ["v=DMARC1; p=reject"],
+        }
+    )
+    raw = (
+        b"From: Microsoft account team <no-reply@accountprotection.microsoft.com>\r\n"
+        b"To: user@recipient.test\r\n"
+        b"Subject: Microsoft account security info\r\n"
+        b"\r\n"
+        b"Security info was added to your Microsoft account.\r\n"
+    )
+    email = parse_email(dkim_key.sign(raw, domain="microsoft.com"))
+    header_result = await header.analyze(email)
+    assert header_result.raw["dmarc"]["dmarc_pass"] is True
+    result = await domain.analyze(email, {"header": header_result})
+    assert _impersonation(result) == []
+    assert result.raw["identity"]["authenticated"] is True
+
+
+async def test_spoofed_brand_domain_that_failed_auth_is_flagged() -> None:
+    """Fixture 2: From microsoft.com, but authentication was not aligned."""
+    email = parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes())
+    result = await domain.analyze(email, _header_context(dmarc_aligned=False))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["sender_domain"] == "microsoft.com"
+    assert finding.evidence["authenticated"] is False
+    assert "did not authenticate" in finding.description
+
+
+async def test_brand_domain_without_header_context_is_not_flagged() -> None:
+    email = parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes())
+    result = await domain.analyze(email)
+    assert _impersonation(result) == []
+    assert result.raw["identity"]["authenticated"] is None
+
+
+async def test_subject_only_claim_is_medium() -> None:
+    email = _email("From: News <news@newsletter.example>").model_copy(
+        update={"subject": "Your PayPal account is limited"}
+    )
+    result = await domain.analyze(email, _header_context(dmarc_aligned=True))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["claimed_in"] == ["subject"]
+
+
+async def test_free_webmail_is_never_the_brand() -> None:
+    result = await domain.analyze(
+        _email('From: "Google Security" <alerts@gmail.com>'), _header_context(dmarc_aligned=True)
+    )
+    [finding] = _impersonation(result)
+    assert finding.evidence["brand"] == "Google"
+    assert finding.severity == Severity.HIGH
+
+
+def test_bind_identity_new_domain_is_critical() -> None:
+    brand = domain.brand_registry().brands[0]
+    findings = domain.bind_identity(
+        [domain.ClaimedBrand(brand, ("body",))],
+        domain.SenderIdentity("fresh.test", authenticated=True),
+        new_domains=frozenset({"fresh.test"}),
+    )
+    [finding] = findings
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["newly_registered"] is True
+    assert domain.bind_identity([], domain.SenderIdentity("x.test", None)) == []
+
+
+
+# --- Domain age and MX ---------------------------------------------------------------------------
+
+DELIVERED = datetime(2026, 9, 7, 9, 0, tzinfo=UTC)  # Received timestamp of the fixtures
+
+
+def _registered(answers: dict, domain: str, days_before_delivery: float) -> None:
+    when = DELIVERED - timedelta(days=days_before_delivery)
+    answers[domain] = httpx.Response(
+        200,
+        json={
+            "objectClassName": "domain",
+            "events": [{"eventAction": "registration", "eventDate": when.isoformat()}],
+        },
+    )
+
+
+def _fixture2():
+    return parse_email((FIXTURES / "spoof_unaligned.eml").read_bytes())
+
+
+@pytest.mark.parametrize(
+    ("days", "finding_id", "severity"),
+    [
+        (3, "domain_age_under_7_days", Severity.CRITICAL),
+        (20, "domain_age_under_30_days", Severity.HIGH),
+        (100, "domain_age_under_180_days", Severity.LOW),
+        (400, None, None),
+    ],
+)
+async def test_domain_age_buckets(
+    offline, days: int, finding_id: str | None, severity: Severity | None
+) -> None:
+    _registered(offline, "zetatech.xyz", days)
+    result = await domain.analyze(_fixture2())
+    age = [f for f in result.findings if f.id.startswith("domain_age_")]
+    if finding_id is None:
+        assert age == []
+    else:
+        [finding] = age
+        assert (finding.id, finding.severity) == (finding_id, severity)
+        assert finding.evidence["domain"] == "zetatech.xyz"
+        assert finding.evidence["age_days"] == pytest.approx(days, abs=0.1)
+    assert result.raw["domain_age"]["zetatech.xyz"]["age_days"] == pytest.approx(days, abs=0.1)
+    assert result.raw["domain_age"]["microsoft.com"]["status"] == "not_found"
+    assert (result.raw["new_domains"] == ["zetatech.xyz"]) is (days < 30)
+
+
+async def test_domain_age_domains_are_deduplicated() -> None:
+    email = _email(
+        "Return-Path: <b@mail.shop.xyz>\nFrom: a@shop.xyz\nReply-To: c@other.xyz\n"
+        "Sender: s@ignored.xyz"
+    )
+    assert domain._age_domains(email) == ["shop.xyz", "other.xyz"]
+
+
+async def test_registered_after_delivery_is_ignored(offline) -> None:
+    _registered(offline, "zetatech.xyz", -30)
+    result = await domain.analyze(_fixture2())
+    assert not [f for f in result.findings if f.id.startswith("domain_age_")]
+    assert result.raw["new_domains"] == []
+
+
+async def test_rdap_unavailable_is_an_error_not_a_finding(offline) -> None:
+    offline["zetatech.xyz"] = httpx.Response(503)
+    result = await domain.analyze(_fixture2())
+    assert result.errors == ["rdap: zetatech.xyz: HTTP 503 (after 4 attempts)"]
+    assert not [f for f in result.findings if f.id.startswith("domain_age_")]
+
+
+async def test_new_domain_makes_brand_impersonation_critical(offline) -> None:
+    _registered(offline, "billing-center.com", 5)
+    email = _email(
+        "Received: from m.billing-center.com ([203.0.113.9]) by mx.recipient.test;"
+        " Mon, 07 Sep 2026 09:00:00 +0000\n"
+        'From: "PayPal Service" <billing@billing-center.com>'
+    )
+    result = await domain.analyze(email, _header_context(dmarc_aligned=True))
+    [finding] = _impersonation(result)
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["newly_registered"] is True
+    assert finding.evidence["lookalike"] is False
+
+
+def _mx_findings(result) -> list:
+    return [f for f in result.findings if f.id == "from_domain_no_mx"]
+
+
+async def test_no_mx_and_no_a_is_flagged() -> None:
+    result = await _analyze("From: a@nomail.xyz")
+    [finding] = _mx_findings(result)
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["null_mx"] is False
+    assert finding.evidence["has_a_record"] is False
+
+
+async def test_null_mx_is_flagged(fake_dns) -> None:
+    fake_dns({("nomail.xyz", "MX"): ["0 ."]})
+    [finding] = _mx_findings(await _analyze("From: a@nomail.xyz"))
+    assert finding.evidence["null_mx"] is True
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        {("mail.xyz", "MX"): ["10 mx.mail.xyz"]},
+        {("mail.xyz", "A"): ["198.51.100.5"]},  # implicit MX
+    ],
+)
+async def test_domain_that_accepts_mail_is_fine(fake_dns, answers: dict) -> None:
+    fake_dns(answers)
+    result = await _analyze("From: a@mail.xyz")
+    assert _mx_findings(result) == []
+    assert result.raw["mx"]["domain"] == "mail.xyz"
+
+
+async def test_mx_lookup_failure_is_an_error(fake_dns) -> None:
+    fake_dns({("slow.xyz", "MX"): dns.exception.Timeout()})
+    result = await _analyze("From: a@slow.xyz")
+    assert _mx_findings(result) == []
+    assert result.errors == ["mx: slow.xyz: timeout"]

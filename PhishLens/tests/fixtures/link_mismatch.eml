@@ -1,0 +1,31 @@
+Return-Path: <service@paypal-notice.example>
+Received: from mail.paypal-notice.example ([203.0.113.12]) by
+ mx.recipient.example with ESMTPS id link-mis; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=paypal-notice.example; dkim=pass
+ header.d=paypal-notice.example; dmarc=pass header.from=paypal-notice.example
+From: PayPal Service <service@paypal-notice.example>
+To: user@recipient.example
+Subject: Your account has been limited
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <link-mismatch-0005@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="==phishlens-link_mismatch-0=="
+
+--==phishlens-link_mismatch-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+
+We noticed unusual activity. Please confirm your details at https://www.paypa=
+l.com
+
+--==phishlens-link_mismatch-0==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+<html><body><p>We noticed unusual activity on your account.</p><p>Please conf=
+irm your details: <a href=3D"http://paypal-secure-login.example/confirm">http=
+s://www.paypal.com</a></p></body></html>
+
+--==phishlens-link_mismatch-0==--

@@ -1,0 +1,30 @@
+Return-Path: <test@av-test.example>
+Received: from mail.av-test.example ([198.51.100.140]) by mx.recipient.example
+ with ESMTPS id eicar-00; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=av-test.example; dkim=pass header.d=av-test.example; dmarc=pass
+ header.from=av-test.example
+From: Test Sender <test@av-test.example>
+To: user@recipient.example
+Subject: Antivirus test file
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <eicar-0014@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==phishlens-eicar_attachment-0=="
+
+--==phishlens-eicar_attachment-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Attached is the standard EICAR antivirus test file.
+
+--==phishlens-eicar_attachment-0==
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="eicar.com"
+MIME-Version: 1.0
+
+WDVPIVAlQEFQWzRcUFpYNTQoUF4pN0NDKTd9JEVJQ0FSLVNUQU5EQVJELUFOVElWSVJVUy1URVNU
+LUZJTEUhJEgrSCo=
+
+--==phishlens-eicar_attachment-0==--

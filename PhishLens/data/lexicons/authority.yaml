@@ -1,0 +1,29 @@
+# Authority: claims to speak for management, IT, banks or government to force compliance.
+finding_id: tone_authority
+severity: low
+cap: 5
+phrases:
+  - it department
+  - it support
+  - helpdesk
+  - help desk
+  - security team
+  - administrator
+  - system administrator
+  - ceo
+  - chief executive
+  - director
+  - hr department
+  - human resources
+  - compliance department
+  - income tax department
+  - police
+  - court
+  - rbi
+  - reserve bank
+  - government
+  - aaykar vibhag
+  - आयकर विभाग
+patterns:
+  - "on\\s+behalf\\s+of\\s+(the\\s+)?(management|board|ceo|director)"
+  - "per\\s+(company|bank|government)\\s+policy"

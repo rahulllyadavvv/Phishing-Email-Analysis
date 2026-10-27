@@ -1,0 +1,614 @@
+"""Tests for phishlens.analyzers.attachments (unpacking, identification, filename tricks)."""
+
+from __future__ import annotations
+
+import io
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from phishlens.analyzers import attachments
+from phishlens.config import get_settings
+from phishlens.models import EnrichmentResult, ParsedEmail, SandboxReport, Severity
+from phishlens.parser import parse_email
+from phishlens.parser.attachments import make_attachment
+
+FIXTURES = Path(__file__).parent / "fixtures"
+ALL_FIXTURES = sorted(p.name for p in FIXTURES.glob("*.eml"))
+
+
+def _fixture(name: str) -> ParsedEmail:
+    return parse_email((FIXTURES / name).read_bytes())
+
+
+def _ids(result) -> dict:
+    return {f.id: f for f in result.findings}
+
+
+def _zip(entries: dict[str, bytes], password: bytes | None = None) -> bytes:
+    import pyzipper
+
+    buf = io.BytesIO()
+    kwargs = {"encryption": pyzipper.WZ_AES} if password else {}
+    with pyzipper.AESZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED, **kwargs) as archive:
+        if password:
+            archive.setpassword(password)
+        for name, data in entries.items():
+            archive.writestr(name, data)
+    return buf.getvalue()
+
+
+async def test_fixture_9_password_zip_opened_with_4455() -> None:
+    result = await attachments.analyze(_fixture("password_zip.eml"))
+    assert result.errors == []
+    assert result.raw["password_candidates"][0] == "4455"
+    finding = _ids(result)["encrypted_archive_password_in_body"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["files"] == [
+        {"archive": "invoice.zip", "password": "4455", "source": "body"}
+    ]
+    rows = {r["filename"]: r for r in result.raw["attachments"]}
+    assert rows["invoice.txt"]["parent"] == "invoice.zip"
+    assert rows["invoice.txt"]["depth"] == 1
+    assert len(rows["invoice.txt"]["sha256"]) == 64
+
+
+async def test_fixture_8_double_extension() -> None:
+    result = await attachments.analyze(_fixture("double_extension.eml"))
+    finding = _ids(result)["double_extension"]
+    assert finding.severity == Severity.HIGH
+    [entry] = finding.evidence["files"]
+    assert (entry["file"], entry["shown_as"], entry["real"]) == ("invoice.pdf.exe", "pdf", "exe")
+    assert "high_risk_file_type" in _ids(result)
+
+
+async def test_fixture_7_zip_is_unpacked() -> None:
+    result = await attachments.analyze(_fixture("zip_attachment.eml"))
+    rows = result.raw["attachments"]
+    assert [(r["filename"], r["parent"]) for r in rows] == [
+        ("notes.zip", None),
+        ("notes.txt", "notes.zip"),
+    ]
+    assert result.findings == []
+
+
+def test_body_passwords() -> None:
+    email = ParsedEmail(
+        text_body="The password for the file is: 'Xk92!pq'. Use PIN 7781 to open.",
+        html_body="<p>Archive <b>passcode</b>: <code>zz-11</code></p>",
+    )
+    assert attachments.body_passwords(email) == ["Xk92!pq", "7781", "zz-11"]
+    assert attachments.body_passwords(ParsedEmail(text_body="no secrets here")) == []
+
+
+async def test_hidden_executable_inside_encrypted_zip() -> None:
+    inner = _zip({"scan.pdf": b"MZ" + b"\0" * 64}, password=b"Doc2026")
+    email = ParsedEmail(
+        text_body="Documents attached. Password: Doc2026",
+        attachments=[make_attachment("scan.zip", inner)],
+    )
+    result = await attachments.analyze(email)
+    findings = _ids(result)
+    assert "encrypted_archive_password_in_body" in findings
+    mismatch = findings["type_mismatch"].evidence["files"][0]
+    assert mismatch["file"] == "scan.pdf" and mismatch["actual"] == "executable"
+
+
+async def test_unopened_encrypted_archive() -> None:
+    email = ParsedEmail(
+        attachments=[make_attachment("locked.zip", _zip({"a.txt": b"x"}, password=b"zzz999"))]
+    )
+    finding = _ids(await attachments.analyze(email))["encrypted_archive_unopened"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["files"][0]["archive"] == "locked.zip"
+
+
+async def test_default_password_opens_without_body_finding() -> None:
+    email = ParsedEmail(
+        attachments=[make_attachment("sample.zip", _zip({"a.txt": b"x"}, password=b"infected"))]
+    )
+    result = await attachments.analyze(email)
+    assert "encrypted_archive_password_in_body" not in _ids(result)
+    assert "encrypted_archive_unopened" not in _ids(result)
+    assert result.raw["archive_events"][0]["source"] == "default"
+
+
+async def test_archive_limit_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARCHIVE_MAX_TOTAL_MB", "1")
+    get_settings.cache_clear()
+    bomb = _zip({"zeros.bin": b"\0" * (3 * 1024 * 1024)})
+    result = await attachments.analyze(ParsedEmail(attachments=[make_attachment("b.zip", bomb)]))
+    finding = _ids(result)["archive_limit_exceeded"]
+    assert finding.severity == Severity.MEDIUM
+    assert finding.evidence["files"][0]["limit"] == "size"
+
+
+async def test_rtlo_name_is_made_visible() -> None:
+    email = ParsedEmail(attachments=[make_attachment("pay‮fdp.exe", b"MZ" + b"\0" * 40)])
+    result = await attachments.analyze(email)
+    [row] = result.raw["attachments"]
+    assert row["safe_name"] == "pay<U+202E>fdp.exe"
+    assert _ids(result)["rtlo_filename"].evidence["files"][0]["file"] == "pay<U+202E>fdp.exe"
+
+
+async def test_no_attachments_is_skipped() -> None:
+    result = await attachments.analyze(ParsedEmail())
+    assert result.skipped and result.raw["attachments"] == [] and result.findings == []
+
+
+async def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom(*args: object) -> None:
+        raise RuntimeError("unpack exploded")
+
+    monkeypatch.setattr(attachments, "prepare_files", boom)
+    result = await attachments.analyze(_fixture("zip_attachment.eml"))
+    assert result.errors == ["attachments: RuntimeError: unpack exploded"]
+
+
+@pytest.mark.parametrize("name", ALL_FIXTURES)
+async def test_every_fixture(name: str) -> None:
+    result = await attachments.analyze(_fixture(name))
+    assert result.errors == []
+
+
+# --- Hash reputation ----------------------------------------------------------------------------
+
+EICAR_SHA256 = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
+
+
+async def test_fixture_14_eicar_mocked_malwarebazaar_hit(
+    respx_mock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Real lookup chain: MalwareBazaar says malicious, so VirusTotal is never asked."""
+    from phishlens.enrichment import abusech, virustotal
+
+    monkeypatch.setenv("ABUSECH_API_KEY", "fake-abusech")
+    monkeypatch.setenv("VIRUSTOTAL_API_KEY", "fake-vt")
+    get_settings.cache_clear()
+    respx_mock.post(abusech.MALWAREBAZAAR_API).respond(
+        200,
+        json={
+            "query_status": "ok",
+            "data": [{"sha256_hash": EICAR_SHA256, "signature": "EICAR-Test-File"}],
+        },
+    )
+    vt = respx_mock.get(url__startswith=virustotal.API_URL).respond(404)
+
+    result = await attachments.analyze(_fixture("eicar_attachment.eml"))
+    finding = _ids(result)["attachment_known_malicious"]
+    assert finding.severity == Severity.CRITICAL
+    [entry] = finding.evidence["files"]
+    assert entry["file"] == "eicar.com" and entry["sha256"] == EICAR_SHA256
+    assert entry["services"] == ["abusech"]
+    assert entry["families"] == ["EICAR-Test-File"]
+    assert entry["links"] == [f"https://bazaar.abuse.ch/sample/{EICAR_SHA256}/"]
+    [row] = result.raw["attachments"]
+    assert row["reputation_verdict"] == "malicious"
+    assert row["deep_analysis_skipped"] is True
+    assert row["skip_reason"] == "known malicious by hash reputation"
+    assert vt.call_count == 0
+
+
+def _res(service: str, status: str, **fields) -> EnrichmentResult:
+    return EnrichmentResult(service=service, query="q", status=status, **fields)
+
+
+async def test_virustotal_detections_and_family(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        return [
+            _res("abusech", "unknown"),
+            _res(
+                "virustotal",
+                "malicious",
+                detections=61,
+                total_engines=70,
+                details={
+                    "popular_threat_classification": {"suggested_threat_label": "trojan.agent"}
+                },
+            ),
+        ]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    result = await attachments.analyze(_fixture("double_extension.eml"))
+    [entry] = _ids(result)["attachment_known_malicious"].evidence["files"]
+    assert entry["detections"] == {"virustotal": "61/70"}
+    assert entry["families"] == ["trojan.agent"]
+
+
+async def test_only_malicious_files_are_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked_up: list[str] = []
+    bad = make_attachment("bad.exe", b"MZ bad")
+    good = make_attachment("good.txt", b"fine")
+    empty = make_attachment("empty.txt", b"")
+
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        looked_up.append(sha256)
+        status = "malicious" if sha256 == bad.sha256 else "unknown"
+        return [_res("abusech", status)]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    email = ParsedEmail(attachments=[bad, good, empty, bad.model_copy()])
+    result = await attachments.analyze(email)
+    rows = result.raw["attachments"]
+    assert [r["deep_analysis_skipped"] for r in rows] == [True, False, False, True]
+    assert rows[2]["reputation"] == [] and rows[2]["reputation_verdict"] is None
+    assert sorted(looked_up) == sorted([bad.sha256, good.sha256])  # deduplicated, empty skipped
+    assert _ids(result)["attachment_known_malicious"].evidence["count"] == 2
+
+
+async def test_unpacked_files_are_looked_up_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    looked_up: list[str] = []
+
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        looked_up.append(sha256)
+        return [_res("abusech", "unknown")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    result = await attachments.analyze(_fixture("zip_attachment.eml"))
+    assert {r["sha256"] for r in result.raw["attachments"]} == set(looked_up)
+    assert len(looked_up) == 2
+
+
+async def test_no_keys_all_not_configured() -> None:
+    result = await attachments.analyze(_fixture("eicar_attachment.eml"))
+    [row] = result.raw["attachments"]
+    assert row["reputation_verdict"] == "not_configured"
+    assert [r["service"] for r in row["reputation"]] == ["abusech", "virustotal"]
+    assert "attachment_known_malicious" not in _ids(result)
+    assert result.errors == []
+
+
+async def test_reputation_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def boom(sha256: str) -> list:
+        raise AssertionError("must not be called")
+
+    monkeypatch.setattr(attachments, "hash_reputation", boom)
+    result = await attachments.analyze(_fixture("eicar_attachment.eml"), reputation=False)
+    assert "reputation" not in result.raw["attachments"][0]
+    assert result.errors == []
+
+
+# --- Office content analysis ---------------------------------------------------------------------
+
+
+def _template_docx() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+        archive.writestr("word/document.xml", "<w:document/>")
+        archive.writestr(
+            "word/_rels/settings.xml.rels",
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/'
+            '2006/relationships/attachedTemplate" Target="https://tpl.example.test/a.dotm" '
+            'TargetMode="External"/></Relationships>',
+        )
+    return buf.getvalue()
+
+
+async def test_office_findings_and_extracted_urls() -> None:
+    email = ParsedEmail(attachments=[make_attachment("offer.docx", _template_docx())])
+    result = await attachments.analyze(email)
+    finding = _ids(result)["remote_template_injection"]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence["files"][0]["target"] == "https://tpl.example.test/a.dotm"
+    assert [(u.url, u.source.value) for u in result.extracted_urls] == [
+        ("https://tpl.example.test/a.dotm", "attachment")
+    ]
+    [row] = result.raw["attachments"]
+    assert "remote_template_injection" in row["flags"]
+    assert row["office"]["external_relationships"][0]["type"] == "attachedTemplate"
+
+
+async def test_known_malicious_file_skips_content_analysis(monkeypatch) -> None:
+    async def fake(sha256: str) -> list[EnrichmentResult]:
+        return [_res("abusech", "malicious")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    email = ParsedEmail(attachments=[make_attachment("offer.docx", _template_docx())])
+    result = await attachments.analyze(email)
+    assert "remote_template_injection" not in _ids(result)
+    assert "office" not in result.raw["attachments"][0]
+    assert result.extracted_urls == []
+
+
+async def test_office_inside_zip_is_analyzed() -> None:
+    outer = _zip({"docs/offer.docx": _template_docx()})
+    result = await attachments.analyze(
+        ParsedEmail(attachments=[make_attachment("docs.zip", outer)])
+    )
+    entry = _ids(result)["remote_template_injection"].evidence["files"][0]
+    assert entry["file"] == "docs/offer.docx"
+
+
+# --- PDF / HTML / SVG content analysis ----------------------------------------------------------
+
+
+async def test_fixture_10_html_smuggling_is_critical() -> None:
+    result = await attachments.analyze(_fixture("html_smuggling.eml"), reputation=False)
+    finding = _ids(result)["html_smuggling"]
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["files"][0]["file"] == "secure_document.html"
+    assert result.raw["attachments"][0]["html"]["scripts"] == 1
+
+
+async def test_pdf_links_become_extracted_urls() -> None:
+    from pypdf import PdfWriter
+    from pypdf.annotations import Link
+
+    writer = PdfWriter()
+    writer.add_blank_page(200, 200)
+    writer.add_annotation(0, Link(rect=(0, 0, 50, 50), url="https://pdf.example.test/pay"))
+    out = io.BytesIO()
+    writer.write(out)
+    email = ParsedEmail(attachments=[make_attachment("invoice.pdf", out.getvalue())])
+    result = await attachments.analyze(email, reputation=False)
+    assert [(u.url, u.source.value) for u in result.extracted_urls] == [
+        ("https://pdf.example.test/pay", "attachment")
+    ]
+    assert result.raw["attachments"][0]["pdf"]["pages"] == 1
+
+
+# --- Executables, shortcuts, images and YARA -----------------------------------------------------
+
+
+async def test_lnk_and_yara_findings() -> None:
+    from tests.test_binaries import make_lnk
+
+    lnk = make_lnk(r"C:\Windows\System32\mshta.exe", "https://hta.example.test/a.hta")
+    marked = b"notes " + b"PHISHLENS-YARA-TEST-MARKER"
+    email = ParsedEmail(
+        attachments=[make_attachment("invoice.pdf.lnk", lnk), make_attachment("n.txt", marked)]
+    )
+    result = await attachments.analyze(email, reputation=False)
+    findings = _ids(result)
+    assert findings["lnk_suspicious_command"].severity == Severity.CRITICAL
+    assert ("https://hta.example.test/a.hta", "attachment") in [
+        (u.url, u.source.value) for u in result.extracted_urls
+    ]
+    yara = findings["yara_match"]
+    assert yara.severity == Severity.MEDIUM  # from the rule's meta
+    assert yara.evidence["files"][0]["file"] == "n.txt"
+
+
+async def test_pe_attachment() -> None:
+    from tests.test_binaries import make_pe
+
+    email = ParsedEmail(attachments=[make_attachment("setup.exe", make_pe())])
+    result = await attachments.analyze(email, reputation=False)
+    assert _ids(result)["pe_executable_attachment"].severity == Severity.HIGH
+    assert result.raw["attachments"][0]["pe"]["valid_pe"] is True
+
+
+async def test_fixture_12_inline_image_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    from phishlens.analyzers import binaries
+
+    monkeypatch.setattr(binaries, "qr_available", lambda: True)
+    monkeypatch.setattr(binaries, "decode_qr", lambda data: ["https://qr.example.test/x"])
+    looked_up: list[str] = []
+
+    async def fake(sha256: str) -> list:
+        looked_up.append(sha256)
+        return []
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake)
+    result = await attachments.analyze(_fixture("qr_code.eml"))
+    [row] = result.raw["attachments"]
+    assert row["inline"] is True and row["filename"] == "qrcode.png"
+    assert looked_up == []  # inline images: no reputation lookups
+    assert _ids(result)["qr_code_url"].evidence["files"][0]["urls"] == [
+        "hxxps://qr[.]example[.]test/x"
+    ]
+    assert [(u.url, u.source.value) for u in result.extracted_urls] == [
+        ("https://qr.example.test/x", "qr_code")
+    ]
+
+
+# --- Sandbox gating and quarantine --------------------------------------------------------------
+
+
+class FakeSandbox:
+    """Stand-in sandbox client: pending for ``pending_polls`` polls, then ``verdict``."""
+
+    def __init__(self, verdict: str = "malicious", pending_polls: int = 1) -> None:
+        self.verdict = verdict
+        self.pending_polls = pending_polls
+        self.submitted: list[str] = []
+        self.polls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        return None
+
+    async def submit(self, data: bytes, filename: str) -> str:
+        self.submitted.append(filename)
+        return f"task-{len(self.submitted)}"
+
+    async def get_report(self, task_id: str) -> SandboxReport:
+        self.polls += 1
+        if self.polls <= self.pending_polls:
+            return SandboxReport(sandbox="cape", task_id=task_id, status="pending")
+        return SandboxReport(
+            sandbox="cape",
+            task_id=task_id,
+            verdict=self.verdict,
+            score=90.0,
+            network_domains=["c2.bad.test"],
+            network_ips=["203.0.113.99"],
+            dropped_hashes=["e" * 64],
+            signatures=["Connects to C2"],
+            link="https://cape.lab.test/analysis/1/",
+        )
+
+
+@pytest.fixture
+def sandbox(monkeypatch: pytest.MonkeyPatch):
+    def install(**kwargs) -> FakeSandbox:
+        fake = FakeSandbox(**kwargs)
+        monkeypatch.setattr(attachments, "_sandbox_client", lambda: fake)
+        return fake
+
+    return install
+
+
+def _risky_email() -> ParsedEmail:
+    from tests.test_binaries import make_pe
+
+    return ParsedEmail(
+        attachments=[
+            make_attachment("setup.exe", make_pe()),
+            make_attachment("notes.txt", b"just notes"),
+        ]
+    )
+
+
+async def test_sandbox_runs_for_risky_unknown_file(sandbox, enrichment_env) -> None:
+    fake = sandbox(verdict="malicious", pending_polls=2)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    assert fake.submitted == ["setup.exe"]
+    finding = _ids(result)["sandbox_malicious"]
+    assert finding.severity == Severity.CRITICAL
+    assert finding.evidence["files"][0]["link"] == "https://cape.lab.test/analysis/1/"
+    rows = {r["filename"]: r for r in result.raw["attachments"]}
+    assert rows["setup.exe"]["sandbox"]["verdict"] == "malicious"
+    assert rows["notes.txt"]["sandbox"] == {
+        "status": "skipped",
+        "reason": "no high-risk type or medium+ static finding",
+    }
+    assert result.raw["sandbox_iocs"] == {
+        "domains": ["c2.bad.test"],
+        "ips": ["203.0.113.99"],
+        "urls": [],
+        "dropped_hashes": ["e" * 64],
+    }
+    assert enrichment_env == [15.0, 15.0]  # two polls while pending (sleeps are faked)
+
+
+async def test_suspicious_and_clean_sandbox_results(sandbox) -> None:
+    sandbox(verdict="suspicious", pending_polls=0)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    assert _ids(result)["sandbox_suspicious"].severity == Severity.MEDIUM
+
+    sandbox(verdict="clean", pending_polls=0)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    findings = _ids(result)
+    assert not {"sandbox_malicious", "sandbox_suspicious"} & set(findings)
+    assert "pe_executable_attachment" in findings  # a clean run never removes static findings
+    assert result.raw["attachments"][0]["sandbox"]["verdict"] == "clean"
+
+
+@pytest.mark.parametrize("verdict", ["clean", "suspicious"])
+async def test_sandbox_runs_even_when_reputation_is_clean(sandbox, monkeypatch, verdict) -> None:
+    fake = sandbox()
+
+    async def fake_reputation(sha256: str) -> list[EnrichmentResult]:
+        return [_res("virustotal", verdict)]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake_reputation)
+    result = await attachments.analyze(_risky_email())
+    assert len(fake.submitted) == 1
+    assert result.raw["attachments"][0]["reputation_verdict"] == verdict
+    assert result.raw["attachments"][0]["sandbox"]["status"] == "done"
+
+
+async def test_sandbox_skipped_when_reputation_known_if_disabled(sandbox, monkeypatch) -> None:
+    monkeypatch.setenv("SANDBOX_KNOWN_CLEAN_FILES", "false")
+    get_settings.cache_clear()
+    fake = sandbox()
+
+    async def fake_reputation(sha256: str) -> list[EnrichmentResult]:
+        return [_res("virustotal", "clean")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake_reputation)
+    result = await attachments.analyze(_risky_email())
+    assert fake.submitted == []
+    assert result.raw["attachments"][0]["sandbox"]["reason"] == "hash reputation already clean"
+
+
+async def test_sandbox_skipped_for_known_malicious(sandbox, monkeypatch) -> None:
+    fake = sandbox()
+
+    async def fake_reputation(sha256: str) -> list[EnrichmentResult]:
+        return [_res("abusech", "malicious")]
+
+    monkeypatch.setattr(attachments, "hash_reputation", fake_reputation)
+    result = await attachments.analyze(_risky_email())
+    assert fake.submitted == []
+    assert result.raw["attachments"][0]["sandbox"]["reason"] == "already known malicious"
+
+
+async def test_no_sandbox_configured() -> None:
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    assert {r["sandbox"]["reason"] for r in result.raw["attachments"]} == {
+        "no sandbox configured"
+    }
+
+
+async def test_sandbox_timeout(sandbox, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SANDBOX_MAX_WAIT_SECONDS", "30")
+    get_settings.cache_clear()
+    sandbox(pending_polls=100)
+    result = await attachments.analyze(_risky_email(), reputation=False)
+    row = result.raw["attachments"][0]
+    assert row["sandbox"]["status"] == "error"
+    assert "no report after 30s" in row["sandbox"]["error"]
+    assert any(e.startswith("sandbox: setup.exe") for e in result.errors)
+
+
+async def test_sandbox_submission_limit(sandbox) -> None:
+    from tests.test_binaries import make_pe
+
+    fake = sandbox(pending_polls=0)
+    files = [make_attachment(f"s{i}.exe", make_pe(timestamp=1700000000 + i)) for i in range(7)]
+    result = await attachments.analyze(ParsedEmail(attachments=files), reputation=False)
+    assert len(fake.submitted) == attachments.MAX_SANDBOX_PER_CASE
+    reasons = [r["sandbox"].get("reason") for r in result.raw["attachments"]]
+    assert reasons.count("limit of 5 sandbox submissions reached") == 2
+
+
+def _open_quarantine(path: str) -> tuple[list[str], list[dict]]:
+    import json
+
+    import pyzipper
+
+    with pyzipper.AESZipFile(path) as archive:
+        archive.setpassword(b"infected")
+        manifest = json.loads(archive.read("manifest.json"))
+        return archive.namelist(), manifest
+
+
+async def test_quarantine_zip(tmp_path: Path) -> None:
+    email = _fixture("zip_attachment.eml")
+    result = await attachments.analyze(email, reputation=False)
+    path = Path(result.raw["quarantine_path"])
+    assert path == tmp_path / "quarantine" / email.sha256 / "files.zip"
+    names, manifest = _open_quarantine(str(path))
+    assert [m["filename"] for m in manifest] == ["notes.zip", "notes.txt"]
+    assert sorted(names) == sorted([m["sha256"] for m in manifest] + ["manifest.json"])
+    with pytest.raises(RuntimeError):  # encrypted: unreadable without the password
+        import pyzipper
+
+        pyzipper.AESZipFile(path).read(manifest[0]["sha256"])
+
+
+async def test_quarantine_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QUARANTINE_ENABLED", "false")
+    get_settings.cache_clear()
+    result = await attachments.analyze(_fixture("zip_attachment.eml"), reputation=False)
+    assert result.raw["quarantine_path"] is None
+
+
+async def test_analyze_files_standalone(sandbox) -> None:
+    from tests.test_binaries import make_pe
+
+    sandbox(verdict="malicious", pending_polls=0)
+    result = await attachments.analyze_files(
+        [make_attachment("payload.exe", make_pe())], case_id="case-42", reputation=False
+    )
+    assert "sandbox_malicious" in _ids(result)
+    assert result.raw["quarantine_path"].endswith("case-42/files.zip")
+    empty = await attachments.analyze_files([], case_id="case-0")
+    assert empty.skipped

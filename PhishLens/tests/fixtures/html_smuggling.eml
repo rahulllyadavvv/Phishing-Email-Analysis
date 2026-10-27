@@ -1,0 +1,47 @@
+Return-Path: <share@docshare.example>
+Received: from mail.docshare.example ([203.0.113.101]) by mx.recipient.example
+ with ESMTPS id html-smu; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=docshare.example; dkim=pass header.d=docshare.example;
+ dmarc=pass header.from=docshare.example
+From: Document Share <share@docshare.example>
+To: user@recipient.example
+Subject: You have received a secure document
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <html-smuggling-0010@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==phishlens-html_smuggling-0=="
+
+--==phishlens-html_smuggling-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+A secure document has been shared with you. Open the attached file.
+
+--==phishlens-html_smuggling-0==
+Content-Type: text/html; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="secure_document.html"
+MIME-Version: 1.0
+
+<!DOCTYPE html>
+<html>
+<head><title>Secure Document</title></head>
+<body>
+<p>Loading your secure document...</p>
+<script>
+// Non-functional test pattern: this function is never called.
+function neverCalled() {
+  var data = "SGFybWxlc3MgcGxhY2Vob2xkZXIgdGV4dCBmb3IgdGVzdHMu";
+  var bytes = atob(data);
+  var blob = new Blob([bytes], {type: "application/octet-stream"});
+  var a = document.createElement("a");
+  a.href = window.URL.createObjectURL(blob);
+  a.download = "document.zip";
+  // a.click() intentionally omitted
+}
+</script>
+</body>
+</html>
+
+--==phishlens-html_smuggling-0==--

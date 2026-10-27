@@ -1,0 +1,40 @@
+# Free email providers: anyone can create an address here, so a company or brand writing from
+# one of these domains is suspicious. Add one registered domain per line (lowercase, no "@").
+domains:
+  - gmail.com
+  - googlemail.com
+  - outlook.com
+  - hotmail.com
+  - live.com
+  - msn.com
+  - yahoo.com
+  - yahoo.co.in
+  - yahoo.co.uk
+  - ymail.com
+  - rocketmail.com
+  - aol.com
+  - icloud.com
+  - me.com
+  - mac.com
+  - proton.me
+  - protonmail.com
+  - pm.me
+  - zoho.com
+  - zohomail.com
+  - zohomail.in
+  - gmx.com
+  - gmx.net
+  - gmx.de
+  - web.de
+  - mail.com
+  - yandex.com
+  - yandex.ru
+  - mail.ru
+  - tutanota.com
+  - tuta.io
+  - rediffmail.com
+  - qq.com
+  - 163.com
+  - 126.com
+  - naver.com
+  - hushmail.com

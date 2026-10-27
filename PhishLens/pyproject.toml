@@ -1,0 +1,104 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phishlens"
+version = "0.1.0"
+description = "Automated phishing email analysis tool"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic",
+    "pydantic-settings",
+    "dnspython",
+    "pyspf",
+    "dkimpy",
+    "checkdmarc",
+    "authres",
+    "tldextract",
+    "rapidfuzz",
+    "httpx",
+    "beautifulsoup4",
+    "python-magic",
+    "extract-msg",
+    "oletools",
+    "msoffcrypto-tool",
+    "py7zr",
+    "pycdlib",
+    "pyzipper",
+    "pypdf",
+    "pefile",
+    "LnkParse3",
+    "yara-python",
+    "pyzbar",
+    "Pillow",
+    "iocextract",
+    "stix2",
+    "mitreattack-python",
+    "jinja2",
+    "weasyprint",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "streamlit",
+    "redis",
+    "rq",
+    "sqlmodel",
+    "typer",
+    "rich",
+    "pyyaml",
+]
+
+[project.scripts]
+phishlens = "phishlens.cli:main"
+
+[project.optional-dependencies]
+ml = [
+    "transformers",
+    "torch",
+    "accelerate",
+]
+llm = [
+    "anthropic",
+]
+eval = [
+    "matplotlib",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "respx",
+    "ruff",
+    "segno",
+    "cryptography",
+    "fakeredis",
+    "matplotlib",
+]
+
+[tool.setuptools.packages.find]
+include = ["phishlens*", "api*", "ui*"]
+
+[tool.setuptools.package-data]
+"phishlens.reporting" = ["templates/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "network_attempt_expected: the test deliberately triggers the no_network guard",
+]
+# oletools uses pyparsing's old camelCase API; nothing we can fix on our side.
+filterwarnings = [
+    "ignore::DeprecationWarning:oletools.olevba",
+    # Starlette's TestClient uses an anyio alias that anyio deprecated; not our code.
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["samples", "quarantine", "reports", "autopilot.py", "progress.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]

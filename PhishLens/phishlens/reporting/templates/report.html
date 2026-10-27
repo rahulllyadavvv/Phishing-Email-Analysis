@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<title>PhishLens report {{ case.id }}</title>
+<style>
+  :root {
+    --ink: #1c2330; --muted: #5d6778; --line: #d9dee7; --soft: #f4f6f9;
+    --clean: #1d7a46; --clean-bg: #e3f4ea; --susp: #9a5b00; --susp-bg: #fdf0d8;
+    --mal: #b3261e; --mal-bg: #fbe3e1; --accent: #2b4c7e;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         color: var(--ink); background: #fff; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 28px 40px; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: .5px; }
+  h2 { font-size: 15px; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 2px solid var(--accent);
+       color: var(--accent); page-break-after: avoid; }
+  h3 { font-size: 13px; margin: 14px 0 6px; color: var(--muted); }
+  .top { display: flex; justify-content: space-between; align-items: center; gap: 16px;
+         border-bottom: 1px solid var(--line); padding-bottom: 14px; }
+  .brand span { color: var(--accent); }
+  .meta { color: var(--muted); font-size: 12px; }
+  .badge { text-align: center; border-radius: 10px; padding: 10px 18px; min-width: 190px; }
+  .badge .label { font-size: 22px; font-weight: 700; letter-spacing: 1px; }
+  .badge .score { font-size: 13px; }
+  .badge.clean { background: var(--clean-bg); color: var(--clean); border: 1px solid var(--clean); }
+  .badge.suspicious { background: var(--susp-bg); color: var(--susp); border: 1px solid var(--susp); }
+  .badge.malicious { background: var(--mal-bg); color: var(--mal); border: 1px solid var(--mal); }
+  .badge.unknown { background: var(--soft); color: var(--muted); border: 1px solid var(--line); }
+  table { width: 100%; border-collapse: collapse; margin: 4px 0 8px; font-size: 12px; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  th { text-align: left; background: var(--soft); font-weight: 600; }
+  th, td { border: 1px solid var(--line); padding: 5px 7px; vertical-align: top; }
+  td.mono, .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+                   word-break: break-all; }
+  dl.kv { display: grid; grid-template-columns: 160px 1fr; gap: 3px 12px; margin: 0; }
+  dl.kv dt { color: var(--muted); }
+  dl.kv dd { margin: 0; word-break: break-word; }
+  .none { color: var(--muted); font-style: italic; }
+  .sev { font-weight: 600; text-transform: uppercase; font-size: 11px; }
+  .sev.critical, .v-malicious { color: var(--mal); }
+  .sev.high { color: #c2410c; }
+  .sev.medium, .v-suspicious { color: var(--susp); }
+  .sev.low { color: var(--muted); }
+  .v-clean { color: var(--clean); }
+  .note { background: var(--soft); border-left: 3px solid var(--accent); padding: 8px 12px; }
+  ol.summary li, ul.actions li { margin-bottom: 4px; }
+  pre.evidence { margin: 4px 0 0; white-space: pre-wrap; background: var(--soft); padding: 6px;
+                 font-size: 10.5px; max-height: none; }
+  blockquote { margin: 2px 0; padding: 2px 8px; border-left: 3px solid var(--line); color: var(--muted); }
+  footer { margin-top: 32px; border-top: 1px solid var(--line); padding-top: 10px; color: var(--muted);
+           font-size: 11px; }
+  a { color: var(--accent); }
+  @page { size: A4; margin: 16mm 12mm 18mm;
+          @bottom-right { content: "Page " counter(page) " of " counter(pages); font-size: 9px; color: #5d6778; }
+          @bottom-left { content: "PhishLens report {{ case.id }}"; font-size: 9px; color: #5d6778; } }
+  @media print { main { padding: 0; max-width: none; } h2 { break-after: avoid; } }
+</style>
+</head>
+<body>
+<main>
+{% macro nothing(text="No findings") %}<p class="none">{{ text }}</p>{% endmacro %}
+{% macro findings_table(rows) %}
+  {% if rows %}
+  <table>
+    <thead><tr><th>Severity</th><th>Finding</th><th>Points</th></tr></thead>
+    <tbody>
+    {% for f in rows %}
+      <tr><td class="sev {{ f.severity }}">{{ f.severity }}</td>
+          <td><strong>{{ f.title }}</strong><br>{{ f.description }}</td>
+          <td>{{ f.score }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}{{ nothing() }}{% endif %}
+{% endmacro %}
+
+<!-- a. Header -->
+<section class="top">
+  <div>
+    <h1 class="brand">Phish<span>Lens</span> analysis report</h1>
+    <div class="meta">Case {{ case.id }} &middot; {{ case.type }} case &middot; {{ case.created }}</div>
+    {% if case.overrides %}<div class="meta">Rules applied: {{ case.overrides }}</div>{% endif %}
+  </div>
+  <div class="badge {{ case.label }}">
+    <div class="label">{{ case.label | upper }}</div>
+    <div class="score">Score {{ case.score }}/100 &middot; confidence {{ case.confidence }}%</div>
+  </div>
+</section>
+
+<!-- b. Executive summary -->
+<h2>Executive summary</h2>
+{% if summary %}
+<ol class="summary">{% for sentence in summary %}<li>{{ sentence }}</li>{% endfor %}</ol>
+{% else %}{{ nothing("No summary available.") }}{% endif %}
+
+<!-- c. Overview -->
+{% if is_file %}
+<h2>File overview</h2>
+{% if file %}
+<dl class="kv">
+  <dt>File name</dt><dd class="mono">{{ file.filename }}</dd>
+  <dt>Size</dt><dd>{{ file.size }} bytes</dd>
+  <dt>Detected type</dt><dd>{{ file.detected_type }}</dd>
+  <dt>MD5</dt><dd class="mono">{{ file.md5 }}</dd>
+  <dt>SHA-1</dt><dd class="mono">{{ file.sha1 }}</dd>
+  <dt>SHA-256</dt><dd class="mono">{{ file.sha256 }}</dd>
+</dl>
+{% else %}{{ nothing() }}{% endif %}
+<p class="note">This is a standalone file case: header authentication, sender and domain,
+body and hidden-artifact analysis only apply to emails and were not run.</p>
+{% else %}
+<h2>Email overview</h2>
+{% if email %}
+<dl class="kv">
+  <dt>From</dt><dd>{{ email["from"] | join(", ") or "-" }}</dd>
+  <dt>To</dt><dd>{{ email.to | join(", ") or "-" }}</dd>
+  {% if email.cc %}<dt>Cc</dt><dd>{{ email.cc | join(", ") }}</dd>{% endif %}
+  <dt>Subject</dt><dd>{{ email.subject or "-" }}</dd>
+  <dt>Date</dt><dd>{{ email.date or "-" }}</dd>
+  <dt>Message-ID</dt><dd class="mono">{{ email.message_id or "-" }}</dd>
+  <dt>Return-Path</dt><dd>{{ email.return_path or "-" }}</dd>
+  <dt>Reply-To</dt><dd>{{ email.reply_to | join(", ") or "-" }}</dd>
+  <dt>Originating IP</dt><dd>{{ email.originating_ip or "-" }}</dd>
+  <dt>Contents</dt><dd>{{ email.urls }} URL(s), {{ email.attachments }} attachment(s){% if email.nested %}, {{ email.nested }} forwarded email(s){% endif %}</dd>
+</dl>
+{% else %}{{ nothing() }}{% endif %}
+
+<!-- d. Header authentication -->
+<h2>Header authentication</h2>
+{% if auth.summary %}
+<table>
+  <thead><tr><th>Mechanism</th><th>Result</th><th>Authenticated domain</th><th>Aligned with From</th></tr></thead>
+  <tbody>
+  {% for row in auth.summary %}
+    <tr><td>{{ row.mechanism | upper }}</td><td>{{ row.result }}</td><td>{{ row.domain or "-" }}</td>
+        <td>{{ "yes" if row.aligned else "no" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}{{ nothing("Authentication could not be evaluated.") }}{% endif %}
+<dl class="kv">
+  <dt>DMARC policy</dt><dd>{{ auth.dmarc_policy or "none published" }}{% if auth.dmarc_record_domain %} (record at {{ auth.dmarc_record_domain }}){% endif %}</dd>
+  <dt>ARC</dt><dd>{{ auth.arc.chain or "none" }}{% if auth.arc.sealer %}, sealed by {{ auth.arc.sealer }}{% if auth.arc.trusted %} (trusted){% endif %}{% endif %}</dd>
+  <dt>Header verdict</dt><dd>{{ auth.verdict.verdict or "unknown" }}{% if auth.verdict.reason %}: {{ auth.verdict.reason }}{% endif %}</dd>
+</dl>
+<h3>Header findings</h3>
+{{ findings_table(auth_findings) }}
+
+<!-- e. Received chain -->
+<h2>Received chain</h2>
+{% if received %}
+<table>
+  <thead><tr><th>#</th><th>From host</th><th>By host</th><th>IP</th><th>Time</th></tr></thead>
+  <tbody>
+  {% for hop in received %}
+    <tr><td>{{ hop.hop }}</td><td>{{ hop.from_host or "-" }}</td><td>{{ hop.by_host or "-" }}</td>
+        <td>{{ hop.ip or "-" }}</td><td>{{ hop.timestamp or "-" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="meta">Oldest hop first.</p>
+{% else %}{{ nothing("No Received headers.") }}{% endif %}
+
+<!-- f. Sender and domain -->
+<h2>Sender and domain</h2>
+{% if domain.table %}
+<table>
+  <thead><tr><th>Role</th><th>Address</th><th>Domain</th><th>Free webmail</th><th>Brand domain</th><th>Same org as From</th></tr></thead>
+  <tbody>
+  {% for row in domain.table %}
+    <tr><td>{{ row.role }}</td><td>{{ row.address }}</td><td>{{ row.domain }}</td>
+        <td>{{ "yes" if row.free_webmail else "no" }}</td><td>{{ row.brand or "-" }}</td>
+        <td>{{ "yes" if row.matches_from else "no" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}{{ nothing() }}{% endif %}
+<h3>Lookalike domains</h3>
+{% if domain.lookalikes %}
+<table>
+  <thead><tr><th>Domain</th><th>Imitates</th><th>Brand</th><th>Technique</th></tr></thead>
+  <tbody>{% for m in domain.lookalikes %}
+    <tr><td>{{ m.domain }}</td><td>{{ m.legitimate }}</td><td>{{ m.brand }}</td><td>{{ m.kind }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing() }}{% endif %}
+<h3>Domain age</h3>
+{% if domain.ages %}
+<table>
+  <thead><tr><th>Domain</th><th>RDAP</th><th>Registered</th><th>Age (days)</th><th>Registrar</th></tr></thead>
+  <tbody>{% for a in domain.ages %}
+    <tr><td>{{ a.domain }}</td><td>{{ a.status }}</td><td>{{ a.registered or "-" }}</td>
+        <td>{{ a.age_days if a.age_days is not none else "-" }}</td><td>{{ a.registrar or "-" }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing() }}{% endif %}
+<h3>Identity binding</h3>
+<dl class="kv">
+  <dt>Sender domain</dt><dd>{{ domain.identity.sender_domain or "-" }}</dd>
+  <dt>Authenticated</dt><dd>{{ "yes" if domain.identity.authenticated else ("no" if domain.identity.authenticated is sameas false else "unknown") }}</dd>
+  <dt>Claimed brands</dt><dd>{% for c in domain.identity.claims %}{{ c.brand }} ({{ c.where }}){% if not loop.last %}, {% endif %}{% else %}none{% endfor %}</dd>
+</dl>
+<h3>Sender findings</h3>
+{{ findings_table(domain_findings) }}
+
+<!-- g. Body analysis -->
+<h2>Body analysis</h2>
+{% if tone %}
+<table>
+  <thead><tr><th>Tactic</th><th>Examples from the message</th></tr></thead>
+  <tbody>{% for t in tone %}
+    <tr><td><span class="sev {{ t.severity }}">{{ t.severity }}</span><br>{{ t.title }}</td>
+        <td>{% for s in t.snippets %}<blockquote>{{ s }}</blockquote>{% endfor %}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing() }}{% endif %}
+{% endif %}
+
+<!-- h. URLs -->
+<h2>URLs</h2>
+{% if urls %}
+<table>
+  <thead><tr><th>URL (defanged)</th><th>Visible text</th><th>Source</th><th>Reputation</th><th>Final URL</th><th>Screenshot</th></tr></thead>
+  <tbody>{% for u in urls %}
+    <tr><td class="mono">{{ u.url }}{% if u.flags %}<br><span class="meta">{{ u.flags }}</span>{% endif %}</td>
+        <td>{{ u.visible or "-" }}</td><td>{{ u.sources }}</td>
+        <td><span class="v-{{ u.verdict }}">{{ u.verdict }}</span>{% for s in u.services %}<br><span class="meta">{{ s }}</span>{% endfor %}</td>
+        <td class="mono">{{ u.final_url or "-" }}</td><td>{{ u.screenshot or "-" }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing("No URLs.") }}{% endif %}
+<h3>URL findings</h3>
+{{ findings_table(url_findings) }}
+
+<!-- i. Attachments -->
+<h2>Attachments</h2>
+{% if attachments %}
+<table>
+  <thead><tr><th>File</th><th>Inside</th><th>Real type</th><th>Size</th><th>Hashes</th><th>Reputation</th><th>Static findings</th><th>Sandbox</th></tr></thead>
+  <tbody>{% for a in attachments %}
+    <tr><td class="mono">{{ a.name }}{% if a.inline %} <span class="meta">(inline image)</span>{% endif %}</td>
+        <td class="mono">{{ a.parent or "-" }}</td><td>{{ a.type }}</td><td>{{ a.size }}</td>
+        <td class="mono">MD5 {{ a.md5 }}<br>SHA-256 {{ a.sha256 }}</td>
+        <td><span class="v-{{ a.verdict }}">{{ a.verdict }}</span></td>
+        <td>{{ a.flags or "-" }}</td><td>{{ a.sandbox or "-" }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing("No attachments.") }}{% endif %}
+<h3>Attachment findings</h3>
+{{ findings_table(attachment_findings) }}
+
+{% if not is_file %}
+<!-- j. Hidden artifacts -->
+<h2>Hidden artifacts</h2>
+{{ findings_table(artifacts) }}
+{% if tracking_domains %}<p class="meta">Tracking domains: {{ tracking_domains | join(", ") }}</p>{% endif %}
+{% if nested %}
+<h3>Forwarded (nested) emails</h3>
+{{ findings_table(nested) }}
+{% endif %}
+{% endif %}
+
+<!-- k. IOCs -->
+<h2>Indicators of compromise</h2>
+{% if iocs %}
+<table>
+  <thead><tr><th>Type</th><th>Value (defanged)</th><th>Verdict</th><th>Source</th><th>Context</th></tr></thead>
+  <tbody>{% for i in iocs %}
+    <tr><td>{{ i.type }}</td><td class="mono">{{ i.value }}</td><td class="v-{{ i.verdict }}">{{ i.verdict }}</td>
+        <td>{{ i.source }}</td><td>{{ i.context }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing() }}{% endif %}
+
+<!-- l. MITRE ATT&CK -->
+<h2>MITRE ATT&amp;CK</h2>
+{% if mitre %}
+<table>
+  <thead><tr><th>Technique</th><th>Name</th><th>Tactic</th><th>Triggered by</th></tr></thead>
+  <tbody>{% for t in mitre %}
+    <tr><td>{{ t.id }}</td><td>{{ t.name }}</td><td>{{ t.tactics }}</td><td class="mono">{{ t.triggered_by }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing("No techniques mapped.") }}{% endif %}
+
+<!-- m. Score breakdown and all findings -->
+<h2>Score breakdown</h2>
+{% if module_scores %}
+<table>
+  <thead><tr><th>Analysis</th><th>Points (after cap)</th></tr></thead>
+  <tbody>{% for m in module_scores %}<tr><td>{{ m.module }}</td><td>{{ m.score }}</td></tr>{% endfor %}</tbody>
+</table>
+{% endif %}
+<h3>All findings</h3>
+{% if findings %}
+<table>
+  <thead><tr><th>Severity</th><th>Finding</th><th>Points</th></tr></thead>
+  <tbody>{% for f in findings %}
+    <tr><td class="sev {{ f.severity }}">{{ f.severity }}</td>
+        <td><strong>{{ f.title }}</strong> <span class="meta mono">{{ f.id }} &middot; {{ f.module }}</span>
+            {% if f.mitre %}<span class="meta"> &middot; {% for m in f.mitre %}{{ m }}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
+            <br>{{ f.description }}
+            {% if f.evidence %}<pre class="evidence">{{ f.evidence }}</pre>{% endif %}</td>
+        <td>{{ f.score }}</td></tr>
+  {% endfor %}</tbody>
+</table>
+{% else %}{{ nothing() }}{% endif %}
+{% if errors %}
+<h3>Analysis problems</h3>
+<ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+{% endif %}
+
+<!-- n. Recommended actions -->
+<h2>Recommended actions</h2>
+{% if recommendations %}
+<ul class="actions">{% for r in recommendations %}<li>{{ r }}</li>{% endfor %}</ul>
+{% else %}{{ nothing("No action needed.") }}{% endif %}
+
+<!-- o. Footer -->
+<footer>
+  PhishLens {{ footer.version }} &middot; services used: {{ footer.used }} &middot; not configured: {{ footer.not_configured }}<br>
+  This verdict was produced automatically from static analysis and threat-intelligence lookups.
+  It can be wrong: review the evidence before acting. Indicators are defanged
+  (hxxp, [.], [@]) so they cannot be clicked by accident.
+</footer>
+</main>
+</body>
+</html>

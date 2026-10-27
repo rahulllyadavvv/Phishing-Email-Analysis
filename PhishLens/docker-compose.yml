@@ -1,0 +1,82 @@
+# docker compose up  ->  UI on http://localhost:8501, API on http://localhost:8000
+# Settings come from .env (optional; see .env.example). The UI has no access to quarantine.
+
+x-phishlens: &phishlens
+  build: .
+  image: phishlens:latest
+  env_file:
+    - path: .env
+      required: false
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    <<: *phishlens
+    command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      JOB_QUEUE: rq
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - data:/var/lib/phishlens
+      - quarantine:/var/lib/phishlens-quarantine
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  worker:
+    <<: *phishlens
+    command: ["rq", "worker", "phishlens", "--url", "redis://redis:6379/0"]
+    environment:
+      JOB_QUEUE: rq
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - data:/var/lib/phishlens
+      - quarantine:/var/lib/phishlens-quarantine
+    depends_on:
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+
+  ui:
+    <<: *phishlens
+    command:
+      - streamlit
+      - run
+      - ui/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    environment:
+      PHISHLENS_API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  data:
+  quarantine:

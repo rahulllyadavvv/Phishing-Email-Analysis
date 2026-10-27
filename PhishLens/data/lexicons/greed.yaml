@@ -1,0 +1,28 @@
+# Greed: prizes, refunds, unexpected money and too-good offers.
+finding_id: tone_greed
+severity: medium
+cap: 5
+phrases:
+  - you have won
+  - you've won
+  - congratulations
+  - winner
+  - prize
+  - lottery
+  - jackpot
+  - free gift
+  - claim your reward
+  - cash reward
+  - refund
+  - tax refund
+  - compensation
+  - inheritance
+  - bitcoin
+  - investment opportunity
+  - double your money
+  - aapne jeeta
+  - inaam
+  - इनाम
+patterns:
+  - "(claim|collect)\\s+(your\\s+)?(prize|reward|refund|money|funds)"
+  - "\\$\\s?\\d{1,3}(,\\d{3})+|\\b\\d+\\s*(million|lakh|crore)\\b"

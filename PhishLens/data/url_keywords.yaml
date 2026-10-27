@@ -1,0 +1,28 @@
+# Words in a URL's path or query that point at credential or payment pages. Matched
+# case-insensitively as whole words (separated by / . - _ ? = & or the string ends).
+# Add lowercase words, one per line.
+credential_keywords:
+  - login
+  - log-in
+  - logon
+  - signin
+  - sign-in
+  - verify
+  - verification
+  - secure
+  - security
+  - update
+  - account
+  - password
+  - passwd
+  - credential
+  - auth
+  - authenticate
+  - confirm
+  - unlock
+  - suspended
+  - billing
+  - payment
+  - wallet
+  - webscr
+  - kyc

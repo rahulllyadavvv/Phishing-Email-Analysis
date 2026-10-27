@@ -1,0 +1,19 @@
+# Streamlit settings for the PhishLens UI (streamlit run ui/app.py)
+[theme]
+base = "light"
+primaryColor = "#2b4c7e"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f6f9"
+textColor = "#1c2330"
+font = "sans serif"
+
+[server]
+headless = true
+maxUploadSize = 25
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"

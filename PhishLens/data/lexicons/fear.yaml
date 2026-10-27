@@ -1,0 +1,27 @@
+# Fear: threats of loss, lock-out, legal trouble or compromise.
+# phrases: lowercase, whole words. patterns: case-insensitive regular expressions.
+finding_id: tone_fear
+severity: medium
+cap: 5
+phrases:
+  - suspended
+  - will be suspended
+  - account will be closed
+  - account locked
+  - unusual sign-in activity
+  - unusual activity
+  - suspicious activity
+  - unauthorized access
+  - security alert
+  - data will be lost
+  - permanently deleted
+  - legal action
+  - arrest warrant
+  - your account has been compromised
+  - virus detected
+  - khata band
+  - account band ho jayega
+  - खाता बंद
+patterns:
+  - "(account|mailbox|service|card)\\s+(will\\s+be|has\\s+been|is)\\s+(suspended|locked|blocked|disabled|terminated|deactivated)"
+  - "(lose|lost)\\s+(access|all\\s+(your\\s+)?data)"

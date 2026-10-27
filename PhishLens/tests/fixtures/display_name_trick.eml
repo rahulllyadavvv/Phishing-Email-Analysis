@@ -1,0 +1,21 @@
+Return-Path: <attacker@evil-example.net>
+Received: from mail.evil-example.net ([203.0.113.60]) by mx.recipient.example
+ with ESMTPS id display-; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=evil-example.net; dkim=pass header.d=evil-example.net;
+ dmarc=none header.from=evil-example.net
+From: "ceo@company.com" <attacker@evil-example.net>
+To: finance@recipient.example
+Subject: Quick favour needed today
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <display-name-0003@phishlens.test>
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+MIME-Version: 1.0
+
+Hi,
+
+Are you at your desk? I need you to process a payment for a supplier today.
+I am in meetings all day, so reply by email only.
+
+Thanks

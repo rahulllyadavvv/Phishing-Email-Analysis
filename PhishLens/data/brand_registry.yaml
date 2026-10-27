@@ -1,0 +1,165 @@
+# Commonly impersonated brands.
+#
+# To add a brand, append an entry under "brands":
+#   name:               display name used in findings
+#   keywords:           lowercase words/phrases that claim the brand (matched as whole words in
+#                       display names, subjects and bodies). Avoid very generic words.
+#   legitimate_domains: registered domains the brand really sends from / links to. Subdomains
+#                       are covered automatically (accounts.google.com matches google.com).
+#   esp_domains:        bulk email providers the brand is known to send through (optional).
+#
+# "generic_labels" are brand domain labels that are also everyday words (office.com, live.com).
+# Lookalike detection only matches them through homoglyphs (0ffice.com), never as a word inside
+# another domain (home-office.example) or via typos/TLD swaps. Add a label here when it causes
+# false positives.
+#
+# "organization" lists your own company's domains, so mail claiming to be from your own
+# organization can be checked the same way. Leave it empty if not needed.
+
+organization:
+  name: ""
+  domains: []
+
+generic_labels: [live, office, windows, bing, azure, outlook, mac, meta, chase, zoom, msn, jio]
+
+brands:
+  - name: Microsoft
+    keywords: [microsoft, office 365, office365, microsoft 365, onedrive, sharepoint, outlook, microsoft teams, azure, xbox]
+    legitimate_domains: [microsoft.com, microsoftonline.com, office.com, office365.com, microsoft365.com, outlook.com, live.com, hotmail.com, sharepoint.com, onedrive.com, azure.com, xbox.com, skype.com, msn.com, bing.com, windows.com]
+    esp_domains: []
+  - name: Google
+    keywords: [google, gmail, google drive, google docs, youtube]
+    legitimate_domains: [google.com, gmail.com, googlemail.com, youtube.com, withgoogle.com, google.co.in]
+    esp_domains: []
+  - name: Apple
+    keywords: [apple, apple id, icloud, itunes, app store]
+    legitimate_domains: [apple.com, icloud.com, me.com, mac.com, itunes.com]
+    esp_domains: []
+  - name: Amazon
+    keywords: [amazon, amazon prime, prime video, aws]
+    legitimate_domains: [amazon.com, amazon.in, amazon.co.uk, amazon.de, amazonaws.com, primevideo.com]
+    esp_domains: [amazonses.com]
+  - name: PayPal
+    keywords: [paypal]
+    legitimate_domains: [paypal.com, paypal.me, paypalobjects.com]
+    esp_domains: []
+  - name: Netflix
+    keywords: [netflix]
+    legitimate_domains: [netflix.com, netflix.net]
+    esp_domains: []
+  - name: DHL
+    keywords: [dhl, dhl express]
+    legitimate_domains: [dhl.com, dhl.de, dpdhl.com]
+    esp_domains: []
+  - name: FedEx
+    keywords: [fedex]
+    legitimate_domains: [fedex.com]
+    esp_domains: []
+  - name: UPS
+    keywords: [ups, united parcel service]
+    legitimate_domains: [ups.com]
+    esp_domains: []
+  - name: LinkedIn
+    keywords: [linkedin]
+    legitimate_domains: [linkedin.com, licdn.com]
+    esp_domains: []
+  - name: Facebook / Meta
+    keywords: [facebook, meta platforms]
+    legitimate_domains: [facebook.com, facebookmail.com, fb.com, meta.com]
+    esp_domains: []
+  - name: Instagram
+    keywords: [instagram]
+    legitimate_domains: [instagram.com]
+    esp_domains: []
+  - name: WhatsApp
+    keywords: [whatsapp]
+    legitimate_domains: [whatsapp.com, whatsapp.net]
+    esp_domains: []
+  - name: X / Twitter
+    keywords: [twitter]
+    legitimate_domains: [twitter.com, x.com]
+    esp_domains: []
+  - name: Adobe
+    keywords: [adobe, adobe acrobat, adobe sign]
+    legitimate_domains: [adobe.com, adobesign.com, echosign.com]
+    esp_domains: []
+  - name: DocuSign
+    keywords: [docusign]
+    legitimate_domains: [docusign.com, docusign.net]
+    esp_domains: []
+  - name: Dropbox
+    keywords: [dropbox]
+    legitimate_domains: [dropbox.com, dropboxmail.com]
+    esp_domains: []
+  - name: Zoom
+    keywords: [zoom meeting, zoom video]
+    legitimate_domains: [zoom.us, zoom.com]
+    esp_domains: []
+  - name: Spotify
+    keywords: [spotify]
+    legitimate_domains: [spotify.com]
+    esp_domains: []
+  - name: Chase
+    keywords: [chase bank, jpmorgan chase]
+    legitimate_domains: [chase.com, jpmorgan.com, jpmorganchase.com]
+    esp_domains: []
+  - name: Bank of America
+    keywords: [bank of america]
+    legitimate_domains: [bankofamerica.com]
+    esp_domains: []
+  - name: Wells Fargo
+    keywords: [wells fargo]
+    legitimate_domains: [wellsfargo.com]
+    esp_domains: []
+  - name: Coinbase
+    keywords: [coinbase]
+    legitimate_domains: [coinbase.com]
+    esp_domains: []
+  - name: Binance
+    keywords: [binance]
+    legitimate_domains: [binance.com]
+    esp_domains: []
+  - name: State Bank of India
+    keywords: [sbi, state bank of india, yono, onlinesbi]
+    legitimate_domains: [sbi.co.in, onlinesbi.sbi, sbi.bank.in, sbicard.com]
+    esp_domains: []
+  - name: HDFC Bank
+    keywords: [hdfc, hdfc bank]
+    legitimate_domains: [hdfcbank.com, hdfc.bank.in]
+    esp_domains: []
+  - name: ICICI Bank
+    keywords: [icici, icici bank]
+    legitimate_domains: [icicibank.com, icici.bank.in]
+    esp_domains: []
+  - name: Axis Bank
+    keywords: [axis bank]
+    legitimate_domains: [axisbank.com, axis.bank.in]
+    esp_domains: []
+  - name: Paytm
+    keywords: [paytm]
+    legitimate_domains: [paytm.com, paytmbank.com]
+    esp_domains: []
+  - name: PhonePe
+    keywords: [phonepe]
+    legitimate_domains: [phonepe.com]
+    esp_domains: []
+  - name: Flipkart
+    keywords: [flipkart]
+    legitimate_domains: [flipkart.com]
+    esp_domains: []
+  - name: India Post
+    keywords: [india post, speed post, ippb]
+    legitimate_domains: [indiapost.gov.in, ippbonline.com]
+    esp_domains: []
+  - name: Income Tax Department
+    keywords: [income tax department, income tax refund, incometax]
+    legitimate_domains: [incometax.gov.in, incometaxindia.gov.in]
+    esp_domains: []
+  - name: Airtel
+    keywords: [airtel]
+    legitimate_domains: [airtel.in, airtel.com]
+    esp_domains: []
+  - name: Jio
+    keywords: [jio, reliance jio]
+    legitimate_domains: [jio.com]
+    esp_domains: []

@@ -1,0 +1,30 @@
+Return-Path: <ap@vendor-invoices.example>
+Received: from mail.vendor-invoices.example ([203.0.113.90]) by
+ mx.recipient.example with ESMTPS id double-e; Mon, 07 Sep 2026 09:00:00 +0000
+Authentication-Results: mx.recipient.example; spf=pass
+ smtp.mailfrom=vendor-invoices.example; dkim=pass
+ header.d=vendor-invoices.example; dmarc=pass
+ header.from=vendor-invoices.example
+From: Accounts Payable <ap@vendor-invoices.example>
+To: user@recipient.example
+Subject: Invoice #20260907
+Date: Mon, 07 Sep 2026 09:00:00 +0000
+Message-ID: <double-ext-0009@phishlens.test>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="==phishlens-double_extension-0=="
+
+--==phishlens-double_extension-0==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Please find the invoice attached.
+
+--==phishlens-double_extension-0==
+Content-Type: application/octet-stream
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="invoice.pdf.exe"
+MIME-Version: 1.0
+
+VGhpcyBpcyBhIGhhcm1sZXNzIHBsYWNlaG9sZGVyLCBub3QgYW4gZXhlY3V0YWJsZS4K
+
+--==phishlens-double_extension-0==--

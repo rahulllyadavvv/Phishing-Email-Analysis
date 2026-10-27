@@ -1,0 +1,67 @@
+# MITRE ATT&CK mapping: which findings indicate which techniques.
+#
+# rules: each rule lists technique IDs and a condition on finding IDs:
+#   any_of: [a, b]          -> the rule fires when at least one of the findings is present
+#   all_of: [a, [b, c]]     -> every item must be present; an inner list means "one of these"
+#   evidence: {key: [v, ...]} (optional) -> the finding's evidence (or one of the entries in
+#                              evidence.files / evidence.urls) must have key equal to one of
+#                              the values (compared case-insensitively). Applies to the any_of
+#                              findings.
+# techniques: fallback name and tactics for each technique, used when the ATT&CK data file
+#   (data/mitre/enterprise-attack.json, from scripts/update_attack_data.py) is not downloaded.
+#   Keep them in line with the current ATT&CK release (a test compares them when the data is
+#   present). ATT&CK now splits the old "defense-evasion" tactic into "stealth" and
+#   "defense-impairment".
+# Add a rule with the finding IDs (stable snake_case IDs) and the technique IDs.
+rules:
+  - techniques: [T1566.001, T1204.002]
+    any_of: [attachment_known_malicious, sandbox_malicious, office_macro_autoexec, pdf_launch_action, lnk_suspicious_command, pe_executable_attachment]
+  - techniques: [T1566.002, T1204.001]
+    any_of: [url_known_malicious, link_text_mismatch, qr_code_url]
+  - techniques: [T1598.003]
+    any_of: [urlscan_login_page_on_unrelated_domain, credential_form_attachment]
+  # Impersonation: T1656 was revoked in current ATT&CK and replaced by T1684.001.
+  - techniques: [T1684.001]
+    any_of: [brand_impersonation, display_name_brand_spoof, llm_impersonation]
+  - techniques: [T1583.001]
+    all_of: [lookalike_domain, [domain_age_under_7_days, domain_age_under_30_days]]
+  - techniques: [T1036.007]
+    any_of: [double_extension]
+  - techniques: [T1036.002]
+    any_of: [rtlo_filename]
+  - techniques: [T1059.005]
+    any_of: [office_macro_suspicious_calls]
+  - techniques: [T1221]
+    any_of: [remote_template_injection]
+  - techniques: [T1027.006]
+    any_of: [html_smuggling]
+  - techniques: [T1553.005]
+    any_of: [high_risk_file_type]
+    evidence: {extension: [iso, img, vhd, vhdx]}
+  - techniques: [T1027]
+    any_of: [obfuscated_script, encoded_link, hidden_text, zero_width_characters]
+  - techniques: [T1027.002]
+    any_of: [pe_packed]
+  - techniques: [T1027.013]
+    any_of: [encrypted_archive_password_in_body, encrypted_archive_unopened, encrypted_office_document]
+  - techniques: [T1566]
+    any_of: [auth_but_unaligned, spf_pass_unaligned, dkim_pass_unaligned, forged_auth_results_header]
+
+techniques:
+  T1027: {name: Obfuscated Files or Information, tactics: [stealth]}
+  T1027.002: {name: "Obfuscated Files or Information: Software Packing", tactics: [stealth]}
+  T1027.006: {name: "Obfuscated Files or Information: HTML Smuggling", tactics: [stealth]}
+  T1027.013: {name: "Obfuscated Files or Information: Encrypted/Encoded File", tactics: [stealth]}
+  T1036.002: {name: "Masquerading: Right-to-Left Override", tactics: [stealth]}
+  T1036.007: {name: "Masquerading: Double File Extension", tactics: [stealth]}
+  T1059.005: {name: "Command and Scripting Interpreter: Visual Basic", tactics: [execution]}
+  T1204.001: {name: "User Execution: Malicious Link", tactics: [execution]}
+  T1204.002: {name: "User Execution: Malicious File", tactics: [execution]}
+  T1221: {name: Template Injection, tactics: [stealth]}
+  T1553.005: {name: "Subvert Trust Controls: Mark-of-the-Web Bypass", tactics: [defense-impairment]}
+  T1566: {name: Phishing, tactics: [initial-access]}
+  T1566.001: {name: "Phishing: Spearphishing Attachment", tactics: [initial-access]}
+  T1566.002: {name: "Phishing: Spearphishing Link", tactics: [initial-access]}
+  T1583.001: {name: "Acquire Infrastructure: Domains", tactics: [resource-development]}
+  T1598.003: {name: "Phishing for Information: Spearphishing Link", tactics: [reconnaissance]}
+  T1684.001: {name: "Social Engineering: Impersonation", tactics: [stealth]}
